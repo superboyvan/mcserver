@@ -16,9 +16,11 @@ export default function ServerManager() {
     return () => clearInterval(interval);
   }, []);
 
+  const API_URL = `http://${window.location.hostname}`;
+
   const fetchSystemInfo = async () => {
     try {
-      const res = await fetch('http://192.168.110.46:5000/api/system-info');
+      const res = await fetch(`${API_URL}/api/system-info`);
       const data = await res.json();
       setMaxRam(data.total_ram_mb);
     } catch (e) {
@@ -28,7 +30,7 @@ export default function ServerManager() {
 
   const fetchStatus = async () => {
     try {
-      const res = await fetch('http://192.168.110.46:5000/api/server-status');
+      const res = await fetch(`${API_URL}/api/server-status`);
       const data = await res.json();
       setRunning(data.running);
       setAllocatedRam(data.allocated_ram);
