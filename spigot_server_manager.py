@@ -1,9 +1,5 @@
+cat > ~/mcserver/spigot_server_manager.py << 'EOF'
 #!/usr/bin/env python3
-"""
-Spigot Server Manager with Modern Web UI
-Run: sudo python3 server_manager.py
-"""
-
 from flask import Flask, render_template_string, request, jsonify
 from flask_cors import CORS
 import psutil
@@ -13,55 +9,32 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-# Configuration
 SERVER_DIR = os.path.expanduser("~/mcserver")
 SPIGOT_JAR = "server.jar"
 server_process = None
 allocated_ram = 2048
 
 def get_system_info():
-    """Get available system RAM"""
     total_ram = psutil.virtual_memory().total // (1024**3)
     return {"total_ram_gb": total_ram, "total_ram_mb": total_ram * 1024}
 
 def start_server(ram_mb):
-    """Start Spigot server with specified RAM"""
     global server_process, allocated_ram
-    
     if server_process and server_process.poll() is None:
         return {"status": "error", "message": "Server already running"}
-    
     allocated_ram = ram_mb
-    cmd = [
-        "java",
-        f"-Xmx{ram_mb}M",
-        f"-Xms{ram_mb//2}M",
-        "-jar",
-        SPIGOT_JAR,
-        "nogui"
-    ]
-    
+    cmd = ["java", f"-Xmx{ram_mb}M", f"-Xms{ram_mb//2}M", "-jar", SPIGOT_JAR, "nogui"]
     try:
         os.chdir(SERVER_DIR)
-        server_process = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1
-        )
+        server_process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
         return {"status": "success", "message": f"Server starting with {ram_mb}MB RAM"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 def stop_server():
-    """Stop the server gracefully"""
     global server_process
-    
     if not server_process or server_process.poll() is not None:
         return {"status": "error", "message": "Server not running"}
-    
     try:
         server_process.stdin.write("stop\n")
         server_process.stdin.flush()
@@ -74,12 +47,9 @@ def stop_server():
         return {"status": "error", "message": str(e)}
 
 def run_command(cmd):
-    """Run a Minecraft command on the server"""
     global server_process
-    
     if not server_process or server_process.poll() is not None:
         return {"status": "error", "message": "Server not running"}
-    
     try:
         server_process.stdin.write(cmd + "\n")
         server_process.stdin.flush()
@@ -88,13 +58,12 @@ def run_command(cmd):
         return {"status": "error", "message": str(e)}
 
 def is_server_running():
-    """Check if server is running"""
     global server_process
     return server_process is not None and server_process.poll() is None
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    return render_template_string(HTML)
 
 @app.route('/api/system-info')
 def api_system_info():
@@ -102,10 +71,7 @@ def api_system_info():
 
 @app.route('/api/server-status')
 def api_server_status():
-    return jsonify({
-        "running": is_server_running(),
-        "allocated_ram": allocated_ram
-    })
+    return jsonify({"running": is_server_running(), "allocated_ram": allocated_ram})
 
 @app.route('/api/start', methods=['POST'])
 def api_start():
@@ -123,7 +89,7 @@ def api_command():
     cmd = data.get('command', '')
     return jsonify(run_command(cmd))
 
-HTML_TEMPLATE = '''<!DOCTYPE html>
+HTML = """<!DOCTYPE html>
 <html>
 <head>
     <title>Server Manager</title>
@@ -261,7 +227,6 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
             <h1>Server Manager</h1>
             <p>Spigot Server Control Panel</p>
         </div>
-
         <div class="grid">
             <div class="stat-box">
                 <div class="stat-label">STATUS</div>
@@ -277,7 +242,6 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                 <div class="stat-sub">Available</div>
             </div>
         </div>
-
         <div class="main-grid">
             <div>
                 <div class="panel">
@@ -290,7 +254,6 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                         </div>
                     </div>
                 </div>
-
                 <div class="panel" style="margin-top: 20px;">
                     <h2>Server Control</h2>
                     <div class="button-group">
@@ -298,7 +261,6 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                         <button class="btn-stop" id="stopBtn" onclick="stopServer()">STOP</button>
                     </div>
                 </div>
-
                 <div class="panel" style="margin-top: 20px;">
                     <h2>Console</h2>
                     <div class="command-group">
@@ -307,115 +269,89 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
                     </div>
                 </div>
             </div>
-
             <div class="panel">
                 <h2>Activity Log</h2>
                 <div class="log-box" id="logBox"></div>
             </div>
         </div>
     </div>
-
     <script>
         let logs = [];
-        
         function updateStatus() {
-            fetch('/api/server-status')
-                .then(r => r.json())
-                .then(data => {
-                    const badge = document.getElementById('statusBadge');
-                    const statusText = document.getElementById('statusText');
-                    const startBtn = document.getElementById('startBtn');
-                    const stopBtn = document.getElementById('stopBtn');
-                    const ramSlider = document.getElementById('ramSlider');
-                    
-                    if (data.running) {
-                        badge.className = 'status-badge status-online';
-                        statusText.textContent = 'ONLINE';
-                        startBtn.disabled = true;
-                        stopBtn.disabled = false;
-                        ramSlider.disabled = true;
-                    } else {
-                        badge.className = 'status-badge status-offline';
-                        statusText.textContent = 'OFFLINE';
-                        startBtn.disabled = false;
-                        stopBtn.disabled = true;
-                        ramSlider.disabled = false;
-                    }
-                    document.getElementById('allocatedRam').textContent = data.allocated_ram + ' MB';
-                });
+            fetch('/api/server-status').then(r => r.json()).then(data => {
+                const badge = document.getElementById('statusBadge');
+                const statusText = document.getElementById('statusText');
+                const startBtn = document.getElementById('startBtn');
+                const stopBtn = document.getElementById('stopBtn');
+                const ramSlider = document.getElementById('ramSlider');
+                if (data.running) {
+                    badge.className = 'status-badge status-online';
+                    statusText.textContent = 'ONLINE';
+                    startBtn.disabled = true;
+                    stopBtn.disabled = false;
+                    ramSlider.disabled = true;
+                } else {
+                    badge.className = 'status-badge status-offline';
+                    statusText.textContent = 'OFFLINE';
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    ramSlider.disabled = false;
+                }
+                document.getElementById('allocatedRam').textContent = data.allocated_ram + ' MB';
+            });
         }
-
         function getSystemInfo() {
-            fetch('/api/system-info')
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('systemRam').textContent = data.total_ram_gb + ' GB';
-                    document.getElementById('ramMax').textContent = data.total_ram_mb;
-                    document.getElementById('ramSlider').max = Math.floor(data.total_ram_mb * 0.75);
-                });
+            fetch('/api/system-info').then(r => r.json()).then(data => {
+                document.getElementById('systemRam').textContent = data.total_ram_gb + ' GB';
+                document.getElementById('ramMax').textContent = data.total_ram_mb;
+                document.getElementById('ramSlider').max = Math.floor(data.total_ram_mb * 0.75);
+            });
         }
-
         function startServer() {
             const ram = document.getElementById('ramSlider').value;
             addLog('Starting server with ' + ram + ' MB...', 'info');
-            fetch('/api/start', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ram: parseInt(ram)})
-            })
-            .then(r => r.json())
-            .then(data => {
+            fetch('/api/start', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ram: parseInt(ram)})})
+            .then(r => r.json()).then(data => {
                 addLog(data.message, data.status === 'success' ? 'success' : 'error');
                 setTimeout(updateStatus, 1000);
             });
         }
-
         function stopServer() {
             addLog('Stopping server...', 'info');
-            fetch('/api/stop', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => {
-                    addLog(data.message, data.status === 'success' ? 'success' : 'error');
-                    setTimeout(updateStatus, 1000);
-                });
+            fetch('/api/stop', {method: 'POST'}).then(r => r.json()).then(data => {
+                addLog(data.message, data.status === 'success' ? 'success' : 'error');
+                setTimeout(updateStatus, 1000);
+            });
         }
-
         function sendCommand() {
             const input = document.getElementById('commandInput');
             const cmd = input.value.trim();
             if (!cmd) return;
             addLog('> ' + cmd, 'command');
-            fetch('/api/command', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({command: cmd})
-            })
-            .then(r => r.json())
-            .then(data => {
+            fetch('/api/command', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({command: cmd})})
+            .then(r => r.json()).then(data => {
                 addLog(data.message, data.status === 'success' ? 'success' : 'error');
             });
             input.value = '';
         }
-
         function addLog(msg, type = 'log') {
             logs.push({msg, type});
             if (logs.length > 100) logs.shift();
             const logBox = document.getElementById('logBox');
-            logBox.innerHTML = logs.map(l => `<div class="log-entry log-${l.type}">${l.msg}</div>`).join('');
+            logBox.innerHTML = logs.map(l => '<div class="log-entry log-' + l.type + '">' + l.msg + '</div>').join('');
             logBox.scrollTop = logBox.scrollHeight;
         }
-
         document.getElementById('ramSlider').addEventListener('input', (e) => {
             document.getElementById('ramValue').textContent = e.target.value;
         });
-
         getSystemInfo();
         updateStatus();
         setInterval(updateStatus, 2000);
         addLog('Server manager ready', 'success');
     </script>
 </body>
-</html>'''
+</html>"""
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80, debug=False)
+EOF
