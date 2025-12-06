@@ -1,4 +1,3 @@
-cat > ~/mcserver/spigot_server_manager.py << 'EOF'
 #!/usr/bin/env python3
 from flask import Flask, render_template_string, request, jsonify
 from flask_cors import CORS
@@ -9,10 +8,41 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-SERVER_DIR = os.path.expanduser("~/mcserver")
+# Auto-detect server directory
+def get_server_dir():
+    # Check if running as sudo (from /root or /home/cam)
+    if os.path.exists("/home/cam/mcserver/server.jar"):
+        return "/home/cam/mcserver"
+    elif os.path.exists(os.path.expanduser("~/mcserver/server.jar")):
+        return os.path.expanduser("~/mcserver")
+    else:
+        # Default fallback
+        return os.path.expanduser("~/mcserver")
+
+SERVER_DIR = get_server_dir()
 SPIGOT_JAR = "server.jar"
 server_process = None
 allocated_ram = 2048
+
+print(f"[INFO] Using server directory: {SERVER_DIR}")
+
+# Check if server is already running
+def find_existing_server():
+    global server_process, allocated_ram
+    try:
+        result = subprocess.run(['pgrep', '-f', f'java.*{SPIGOT_JAR}'], capture_output=True, text=True)
+        if result.stdout.strip():
+            pid = int(result.stdout.strip().split('\n')[0])
+            print(f"[INFO] Found existing server process with PID {pid}")
+            server_process = psutil.Process(pid)
+            allocated_ram = 2048  # Default if we can't detect
+            return True
+    except Exception as e:
+        print(f"[INFO] No existing server found: {e}")
+    return False
+
+# Try to attach to existing server on startup
+find_existing_server()
 
 def get_system_info():
     total_ram = psutil.virtual_memory().total // (1024**3)
@@ -353,5 +383,4 @@ HTML = """<!DOCTYPE html>
 </html>"""
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=80, debug=False)
-EOF
+    app.run(host='0.0.0.0', port=5000, debug=False)
