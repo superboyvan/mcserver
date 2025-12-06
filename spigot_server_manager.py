@@ -10,13 +10,11 @@ CORS(app)
 
 # Auto-detect server directory
 def get_server_dir():
-    # Check if running as sudo (from /root or /home/cam)
     if os.path.exists("/home/cam/mcserver/server.jar"):
         return "/home/cam/mcserver"
     elif os.path.exists(os.path.expanduser("~/mcserver/server.jar")):
         return os.path.expanduser("~/mcserver")
     else:
-        # Default fallback
         return os.path.expanduser("~/mcserver")
 
 SERVER_DIR = get_server_dir()
@@ -35,13 +33,12 @@ def find_existing_server():
             pid = int(result.stdout.strip().split('\n')[0])
             print(f"[INFO] Found existing server process with PID {pid}")
             server_process = psutil.Process(pid)
-            allocated_ram = 2048  # Default if we can't detect
+            allocated_ram = 2048
             return True
     except Exception as e:
         print(f"[INFO] No existing server found: {e}")
     return False
 
-# Try to attach to existing server on startup
 find_existing_server()
 
 def get_system_info():
@@ -50,7 +47,7 @@ def get_system_info():
 
 def start_server(ram_mb):
     global server_process, allocated_ram
-    if server_process and server_process.poll() is None:
+    if server_process and is_server_running():
         return {"status": "error", "message": "Server already running"}
     allocated_ram = ram_mb
     cmd = ["java", f"-Xmx{ram_mb}M", f"-Xms{ram_mb//2}M", "-jar", SPIGOT_JAR, "nogui"]
@@ -63,22 +60,40 @@ def start_server(ram_mb):
 
 def stop_server():
     global server_process
-    if not server_process or server_process.poll() is not None:
+    if not server_process:
         return {"status": "error", "message": "Server not running"}
-    try:
-        server_process.stdin.write("stop\n")
-        server_process.stdin.flush()
-        server_process.wait(timeout=30)
-        return {"status": "success", "message": "Server stopped"}
-    except subprocess.TimeoutExpired:
-        server_process.kill()
-        return {"status": "success", "message": "Server force stopped"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    
+    if hasattr(server_process, 'poll'):
+        if server_process.poll() is not None:
+            return {"status": "error", "message": "Server not running"}
+        try:
+            server_process.stdin.write("stop\n")
+            server_process.stdin.flush()
+            server_process.wait(timeout=30)
+            return {"status": "success", "message": "Server stopped"}
+        except subprocess.TimeoutExpired:
+            server_process.kill()
+            return {"status": "success", "message": "Server force stopped"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+    else:
+        try:
+            server_process.terminate()
+            server_process.wait(timeout=10)
+            return {"status": "success", "message": "Server stopped"}
+        except:
+            server_process.kill()
+            return {"status": "success", "message": "Server force stopped"}
 
 def run_command(cmd):
     global server_process
-    if not server_process or server_process.poll() is not None:
+    if not server_process:
+        return {"status": "error", "message": "Server not running"}
+    
+    if not hasattr(server_process, 'stdin'):
+        return {"status": "error", "message": "Cannot send commands to existing process"}
+    
+    if server_process.poll() is not None:
         return {"status": "error", "message": "Server not running"}
     try:
         server_process.stdin.write(cmd + "\n")
@@ -89,7 +104,12 @@ def run_command(cmd):
 
 def is_server_running():
     global server_process
-    return server_process is not None and server_process.poll() is None
+    if server_process is None:
+        return False
+    if hasattr(server_process, 'poll'):
+        return server_process.poll() is None
+    else:
+        return server_process.is_running()
 
 @app.route('/')
 def index():
@@ -383,4 +403,4 @@ HTML = """<!DOCTYPE html>
 </html>"""
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=80, debug=False)
