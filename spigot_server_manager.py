@@ -5,9 +5,32 @@ import psutil
 import subprocess
 import os
 import socket
+import requests
+import shutil
+import threading
 
 app = Flask(__name__)
 CORS(app)
+
+# Server JAR cache directory
+CACHE_DIR = os.path.expanduser("~/mcserver_cache")
+BUILDTOOLS_DIR = os.path.join(CACHE_DIR, "buildtools")
+os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(BUILDTOOLS_DIR, exist_ok=True)
+
+# Comprehensive version list
+MINECRAFT_VERSIONS = [
+    "1.21.5", "1.21.4", "1.21.3", "1.21.1", "1.21",
+    "1.20.6", "1.20.4", "1.20.2", "1.20.1", "1.20",
+    "1.19.4", "1.19.3", "1.19.2", "1.19.1", "1.19",
+    "1.18.2", "1.18.1", "1.18",
+    "1.17.1", "1.17",
+    "1.16.5", "1.16.4", "1.16.3", "1.16.2", "1.16.1",
+    "1.15.2", "1.14.4", "1.13.2", "1.12.2", "1.11.2",
+    "1.10.2", "1.9.4", "1.8.8", "1.7.10"
+]
+
+BUILDTOOLS_URL = "https://hub.spigotmc.org/jenkins/job/BuildTools/lastSuccessfulBuild/artifact/target/BuildTools.jar"
 
 def get_server_dir():
     if os.path.exists("/home/cam/mcserver/server.jar"):
@@ -22,8 +45,110 @@ SPIGOT_JAR = "server.jar"
 server_process = None
 allocated_ram = 2048
 servers = {}
+build_status = {}
 
 print(f"[INFO] Using server directory: {SERVER_DIR}")
+print(f"[INFO] Cache directory: {CACHE_DIR}")
+
+def download_buildtools():
+    """Download BuildTools.jar if not present"""
+    buildtools_path = os.path.join(BUILDTOOLS_DIR, "BuildTools.jar")
+    
+    if os.path.exists(buildtools_path):
+        print(f"[INFO] BuildTools.jar already exists")
+        return buildtools_path
+    
+    print(f"[INFO] Downloading BuildTools.jar...")
+    try:
+        response = requests.get(BUILDTOOLS_URL, timeout=60, stream=True)
+        if response.status_code == 200:
+            with open(buildtools_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            print(f"[INFO] BuildTools.jar downloaded successfully")
+            return buildtools_path
+        else:
+            print(f"[ERROR] Failed to download BuildTools: HTTP {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"[ERROR] BuildTools download failed: {e}")
+        return None
+
+def build_spigot(version, server_name):
+    """Build Spigot for a specific version using BuildTools"""
+    build_status[server_name] = {"status": "downloading_buildtools", "progress": 10}
+    
+    # Download BuildTools
+    buildtools_path = download_buildtools()
+    if not buildtools_path:
+        build_status[server_name] = {"status": "error", "message": "Failed to download BuildTools"}
+        return None
+    
+    # Check if version already built
+    cache_file = os.path.join(CACHE_DIR, f"spigot-{version}.jar")
+    if os.path.exists(cache_file):
+        print(f"[INFO] Using cached Spigot {version}")
+        build_status[server_name] = {"status": "complete", "progress": 100}
+        return cache_file
+    
+    # Build directory for this version
+    version_build_dir = os.path.join(BUILDTOOLS_DIR, f"build-{version}")
+    os.makedirs(version_build_dir, exist_ok=True)
+    
+    build_status[server_name] = {"status": "building", "progress": 30}
+    print(f"[INFO] Building Spigot {version}... This may take several minutes")
+    
+    try:
+        # Copy BuildTools to build directory
+        bt_copy = os.path.join(version_build_dir, "BuildTools.jar")
+        shutil.copy2(buildtools_path, bt_copy)
+        
+        # Run BuildTools
+        cmd = ["java", "-jar", "BuildTools.jar", "--rev", version]
+        process = subprocess.Popen(
+            cmd,
+            cwd=version_build_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        # Wait for build to complete
+        stdout, stderr = process.communicate()
+        
+        if process.returncode != 0:
+            print(f"[ERROR] BuildTools failed: {stderr}")
+            build_status[server_name] = {"status": "error", "message": "Build failed"}
+            return None
+        
+        build_status[server_name] = {"status": "finalizing", "progress": 90}
+        
+        # Find the built JAR
+        spigot_jar = os.path.join(version_build_dir, f"spigot-{version}.jar")
+        if not os.path.exists(spigot_jar):
+            # Try alternative naming
+            for file in os.listdir(version_build_dir):
+                if file.startswith("spigot") and file.endswith(".jar"):
+                    spigot_jar = os.path.join(version_build_dir, file)
+                    break
+        
+        if not os.path.exists(spigot_jar):
+            print(f"[ERROR] Built JAR not found")
+            build_status[server_name] = {"status": "error", "message": "Built JAR not found"}
+            return None
+        
+        # Copy to cache
+        shutil.copy2(spigot_jar, cache_file)
+        print(f"[INFO] Spigot {version} built and cached successfully")
+        
+        build_status[server_name] = {"status": "complete", "progress": 100}
+        return cache_file
+        
+    except Exception as e:
+        print(f"[ERROR] Build failed: {e}")
+        build_status[server_name] = {"status": "error", "message": str(e)}
+        return None
 
 def find_existing_server():
     global server_process, allocated_ram
@@ -114,7 +239,6 @@ def run_command(cmd):
         return {"status": "error", "message": str(e)}
 
 def run_command_on_server(server_name, cmd):
-    """Run command on a specific named server"""
     if server_name not in servers:
         return {"status": "error", "message": f"Server '{server_name}' not found"}
     
@@ -130,7 +254,6 @@ def run_command_on_server(server_name, cmd):
         return {"status": "error", "message": str(e)}
 
 def add_to_hosts(server_name):
-    """Add server name to /etc/hosts"""
     try:
         hosts_file = '/etc/hosts'
         hostname = socket.gethostname()
@@ -149,26 +272,35 @@ def add_to_hosts(server_name):
         print(f"[WARNING] Could not update /etc/hosts: {e}")
 
 def update_server_properties(props_file, server_name, port):
-    """Update server.properties with custom name and port"""
     try:
+        if not os.path.exists(props_file):
+            with open(props_file, 'w') as f:
+                f.write(f"motd={server_name}\n")
+                f.write(f"server-port={port}\n")
+                f.write("online-mode=true\n")
+                f.write("max-players=20\n")
+            return
+        
         with open(props_file, 'r') as f:
             lines = f.readlines()
         
-        updated = False
+        updated_motd = False
+        updated_port = False
         new_lines = []
         
         for line in lines:
             if line.startswith('motd='):
                 new_lines.append(f'motd={server_name}\n')
-                updated = True
+                updated_motd = True
             elif line.startswith('server-port='):
                 new_lines.append(f'server-port={port}\n')
-                updated = True
+                updated_port = True
             else:
                 new_lines.append(line)
         
-        if not updated or 'motd=' not in ''.join(new_lines):
+        if not updated_motd:
             new_lines.append(f'motd={server_name}\n')
+        if not updated_port:
             new_lines.append(f'server-port={port}\n')
         
         with open(props_file, 'w') as f:
@@ -177,7 +309,6 @@ def update_server_properties(props_file, server_name, port):
         print(f"[ERROR] Could not update server.properties: {e}")
 
 def get_next_available_port():
-    """Get next available port starting from 25565"""
     used_ports = {s.get('port', 25565) for s in servers.values() if s.get('port')}
     port = 25565
     while port in used_ports:
@@ -185,7 +316,6 @@ def get_next_available_port():
     return port
 
 def start_named_server(server_name, ram_mb):
-    """Start a named server instance"""
     if server_name not in servers:
         return {"status": "error", "message": f"Server '{server_name}' not found"}
     
@@ -207,8 +337,7 @@ def start_named_server(server_name, ram_mb):
         server_info['pid'] = proc.pid
         
         props_file = os.path.join(server_dir, "server.properties")
-        if os.path.exists(props_file):
-            update_server_properties(props_file, server_name, port)
+        update_server_properties(props_file, server_name, port)
         
         return {"status": "success", "message": f"Server '{server_name}' started on port {port} with {ram_mb}MB RAM"}
     except Exception as e:
@@ -248,12 +377,22 @@ def api_command_named(server_name):
     cmd = data.get('command', '')
     return jsonify(run_command_on_server(server_name, cmd))
 
+@app.route('/api/versions', methods=['GET'])
+def api_versions():
+    versions = [{"version": v, "type": "spigot"} for v in MINECRAFT_VERSIONS]
+    return jsonify({"versions": versions})
+
+@app.route('/api/build-status/<server_name>', methods=['GET'])
+def api_build_status(server_name):
+    status = build_status.get(server_name, {"status": "unknown", "progress": 0})
+    return jsonify(status)
+
 @app.route('/api/build-server', methods=['POST'])
 def api_build_server():
     data = request.json
     server_name = data.get('server_name', 'Server')
     ram = data.get('ram', 2048)
-    version = data.get('version', 'latest')
+    version = data.get('version', '1.21.5')
     
     if server_name in servers:
         return jsonify({"status": "error", "message": f"Server '{server_name}' already exists"})
@@ -267,35 +406,48 @@ def api_build_server():
         'version': version
     }
     
-    try:
-        import shutil
-        server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
-        
-        os.makedirs(server_dir, exist_ok=True)
-        
-        src_jar = os.path.join(SERVER_DIR, SPIGOT_JAR)
-        dst_jar = os.path.join(server_dir, SPIGOT_JAR)
-        if os.path.exists(src_jar) and not os.path.exists(dst_jar):
-            shutil.copy2(src_jar, dst_jar)
-        
-        src_props = os.path.join(SERVER_DIR, "server.properties")
-        dst_props = os.path.join(server_dir, "server.properties")
-        if os.path.exists(src_props) and not os.path.exists(dst_props):
-            shutil.copy2(src_props, dst_props)
-        
-        src_eula = os.path.join(SERVER_DIR, "eula.txt")
-        dst_eula = os.path.join(server_dir, "eula.txt")
-        if os.path.exists(src_eula) and not os.path.exists(dst_eula):
-            shutil.copy2(src_eula, dst_eula)
-        
-        servers[server_name]['building'] = False
-        add_to_hosts(server_name)
-        
-        msg = f"Server '{server_name}' built for version {version}. Ready to start."
-        return jsonify({"status": "success", "message": msg})
-    except Exception as e:
-        servers[server_name]['building'] = False
-        return jsonify({"status": "error", "message": f"Failed to build server: {str(e)}"})
+    def build_async():
+        try:
+            server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
+            os.makedirs(server_dir, exist_ok=True)
+            
+            # Build/download Spigot
+            jar_file = build_spigot(version, server_name)
+            
+            if not jar_file:
+                servers[server_name]['building'] = False
+                return
+            
+            # Copy JAR to server directory
+            dst_jar = os.path.join(server_dir, SPIGOT_JAR)
+            shutil.copy2(jar_file, dst_jar)
+            
+            # Create eula.txt
+            eula_file = os.path.join(server_dir, "eula.txt")
+            with open(eula_file, 'w') as f:
+                f.write("eula=true\n")
+            
+            # Create server.properties
+            props_file = os.path.join(server_dir, "server.properties")
+            port = get_next_available_port()
+            update_server_properties(props_file, server_name, port)
+            
+            servers[server_name]['building'] = False
+            servers[server_name]['port'] = port
+            add_to_hosts(server_name)
+            
+            print(f"[INFO] Server '{server_name}' built successfully for Spigot {version}")
+            
+        except Exception as e:
+            servers[server_name]['building'] = False
+            print(f"[ERROR] Failed to build server: {e}")
+    
+    # Start build in background thread
+    thread = threading.Thread(target=build_async)
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({"status": "success", "message": f"Building server '{server_name}' for Spigot {version}. This may take several minutes..."})
 
 @app.route('/api/servers', methods=['GET'])
 def api_servers():
@@ -340,7 +492,6 @@ def api_stop_named(server_name):
 
 @app.route('/api/server-files/<server_name>', methods=['GET'])
 def api_server_files(server_name):
-    """List files in server directory"""
     if server_name not in servers:
         return jsonify({"status": "error", "message": "Server not found"}), 404
     
@@ -365,7 +516,6 @@ def api_server_files(server_name):
 
 @app.route('/api/upload/<server_name>', methods=['POST'])
 def api_upload(server_name):
-    """Upload files to server with security checks"""
     if server_name not in servers:
         return jsonify({"status": "error", "message": "Server not found"}), 404
     
@@ -377,7 +527,6 @@ def api_upload(server_name):
         uploaded = []
         for file in request.files.getlist('files'):
             if file.filename:
-                # Security: Sanitize filename
                 filename = os.path.basename(file.filename)
                 filename = filename.replace('/', '').replace('\\', '')
                 
@@ -386,11 +535,9 @@ def api_upload(server_name):
                 
                 filepath = os.path.join(server_dir, filename)
                 
-                # Double-check path is within server directory
                 if not os.path.abspath(filepath).startswith(os.path.abspath(server_dir)):
                     continue
                 
-                # File size limit (100MB)
                 file.seek(0, 2)
                 size = file.tell()
                 file.seek(0)
@@ -407,14 +554,12 @@ def api_upload(server_name):
 
 @app.route('/api/delete-file/<server_name>/<filename>', methods=['DELETE'])
 def api_delete_file(server_name, filename):
-    """Delete a file from server"""
     if server_name not in servers:
         return jsonify({"status": "error", "message": "Server not found"}), 404
     
     server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
     filepath = os.path.join(server_dir, filename)
     
-    # Security check
     if not os.path.abspath(filepath).startswith(os.path.abspath(server_dir)):
         return jsonify({"status": "error", "message": "Invalid path"}), 403
     
@@ -576,15 +721,9 @@ HTML = """<!DOCTYPE html>
                     </div>
 
                     <div class="control-section">
-                        <div class="control-label">SERVER VERSION</div>
+                        <div class="control-label">SERVER VERSION (Spigot)</div>
                         <select id="serverVersion">
-                            <option value="1.21.1">1.21.1</option>
-                            <option value="1.20.1">1.20.1</option>
-                            <option value="1.19.4">1.19.4</option>
-                            <option value="1.18.2">1.18.2</option>
-                            <option value="1.16.5">1.16.5</option>
-                            <option value="1.12.2">1.12.2</option>
-                            <option value="1.8.8">1.8.8</option>
+                            <option value="">Loading versions...</option>
                         </select>
                     </div>
 
@@ -716,6 +855,23 @@ HTML = """<!DOCTYPE html>
             }).catch(e => console.log('System info failed:', e));
         }
 
+        function loadVersions() {
+            fetch('/api/versions').then(r => r.json()).then(d => {
+                const select = document.getElementById('serverVersion');
+                select.innerHTML = '';
+                d.versions.forEach(v => {
+                    const opt = document.createElement('option');
+                    opt.value = v.version;
+                    opt.textContent = `${v.version} (${v.type})`;
+                    select.appendChild(opt);
+                });
+                select.value = '1.21.5';
+            }).catch(e => {
+                console.log('Load versions failed:', e);
+                document.getElementById('serverVersion').innerHTML = '<option value="1.21.5">1.21.5 (fallback)</option>';
+            });
+        }
+
         function startServer() {
             const ram = document.getElementById('ramSlider').value;
             addLog(`Starting with ${ram}MB...`, 'info');
@@ -759,7 +915,8 @@ HTML = """<!DOCTYPE html>
                 addLog('Server name required', 'error');
                 return;
             }
-            addLog(`Creating '${name}' (${version})...`, 'info');
+            addLog(`Creating '${name}' (Spigot ${version})...`, 'info');
+            addLog('NOTE: Building Spigot takes 5-10 minutes on first run!', 'info');
             fetch('/api/build-server', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({server_name: name, ram: parseInt(ram), version: version})})
                 .then(r => r.json()).then(d => {
                     addLog(d.message, d.status === 'success' ? 'success' : 'error');
@@ -776,7 +933,7 @@ HTML = """<!DOCTYPE html>
                         <div class="server-info">Version: ${s.version} | RAM: ${s.ram}MB | Port: ${s.port}</div>
                         <div class="server-status">
                             <span class="status-dot" style="background: ${s.building ? '#ff9800' : s.running ? '#00b368' : '#666'};"></span>
-                            <span>${s.building ? 'BUILDING' : s.running ? 'ONLINE' : 'OFFLINE'}</span>
+                            <span>${s.building ? 'BUILDING (may take 5-10 min)' : s.running ? 'ONLINE' : 'OFFLINE'}</span>
                         </div>
                         <button class="btn-primary" onclick="startNamed('${s.name}', ${s.ram})" style="width: 100%; margin-top: 10px;" ${s.running || s.building ? 'disabled' : ''}>START</button>
                         <button class="btn-danger" onclick="stopNamed('${s.name}')" style="width: 100%; margin-top: 5px;" ${!s.running ? 'disabled' : ''}>STOP</button>
@@ -921,6 +1078,7 @@ HTML = """<!DOCTYPE html>
         updateStatus();
         loadServers();
         loadServerOptions();
+        loadVersions();
         initCmds();
         setInterval(updateStatus, 2000);
         setInterval(loadServers, 5000);
