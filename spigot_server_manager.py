@@ -533,6 +533,63 @@ HTML = """<!DOCTYPE html>
 
                     <div class="control-section">
                         <div class="control-label">RAM ALLOCATION</div>
+                        <input type="range" id="ramSlider" min="512" max="8192" step="256" value="2048" disabled>
+                        <div style="color: #aaa; font-size: 0.9em;"><span id="ramValue">2048</span> MB</div>
+                    </div>
+
+                    <div class="button-row" style="margin-top: 30px;">
+                        <button class="btn-success" id="startBtn" onclick="startServer()">START SERVER</button>
+                        <button class="btn-danger" id="stopBtn" onclick="stopServer()" disabled>STOP SERVER</button>
+                    </div>
+
+                    <div style="margin-top: 30px;">
+                        <div class="control-label">COMMAND INPUT</div>
+                        <div class="console-input">
+                            <input type="text" id="cmdInput" placeholder="Enter command...">
+                            <button class="btn-primary" onclick="sendCmd()">SEND</button>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 30px;">
+                        <div class="control-label">ACTIVITY LOG</div>
+                        <div class="log" id="logBox"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="servers-tab" class="tab-content" style="display: none;">
+                <div class="content-panel">
+                    <div class="panel-title">Active Servers</div>
+                    <div class="server-list" id="serverList">
+                        <div style="color: #aaa;">No servers running</div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="create-tab" class="tab-content" style="display: none;">
+                <div class="content-panel">
+                    <div class="panel-title">Create New Server</div>
+                    
+                    <div class="control-section">
+                        <div class="control-label">SERVER NAME</div>
+                        <input type="text" id="serverName" placeholder="e.g., Cammc">
+                    </div>
+
+                    <div class="control-section">
+                        <div class="control-label">SERVER VERSION</div>
+                        <select id="serverVersion">
+                            <option value="1.21.1">1.21.1</option>
+                            <option value="1.20.1">1.20.1</option>
+                            <option value="1.19.4">1.19.4</option>
+                            <option value="1.18.2">1.18.2</option>
+                            <option value="1.16.5">1.16.5</option>
+                            <option value="1.12.2">1.12.2</option>
+                            <option value="1.8.8">1.8.8</option>
+                        </select>
+                    </div>
+
+                    <div class="control-section">
+                        <div class="control-label">RAM ALLOCATION</div>
                         <input type="range" id="newRamSlider" min="512" max="8192" step="256" value="2048">
                         <div style="color: #aaa; font-size: 0.9em;"><span id="newRamValue">2048</span> MB</div>
                     </div>
@@ -647,7 +704,7 @@ HTML = """<!DOCTYPE html>
                 document.getElementById('startBtn').disabled = online;
                 document.getElementById('stopBtn').disabled = !online;
                 document.getElementById('ramSlider').disabled = online;
-            });
+            }).catch(e => console.log('Status check failed:', e));
         }
 
         function getSystemInfo() {
@@ -656,7 +713,7 @@ HTML = """<!DOCTYPE html>
                 document.getElementById('sysTotalRam').textContent = d.total_ram_gb + ' GB';
                 document.getElementById('ramSlider').max = Math.floor(d.total_ram_mb * 0.75);
                 document.getElementById('newRamSlider').max = Math.floor(d.total_ram_mb * 0.75);
-            });
+            }).catch(e => console.log('System info failed:', e));
         }
 
         function startServer() {
@@ -666,7 +723,7 @@ HTML = """<!DOCTYPE html>
                 .then(r => r.json()).then(d => {
                     addLog(d.message, d.status === 'success' ? 'success' : 'error');
                     setTimeout(updateStatus, 1000);
-                });
+                }).catch(e => addLog('Start failed: ' + e, 'error'));
         }
 
         function stopServer() {
@@ -674,7 +731,7 @@ HTML = """<!DOCTYPE html>
             fetch('/api/stop', {method: 'POST'}).then(r => r.json()).then(d => {
                 addLog(d.message, d.status === 'success' ? 'success' : 'error');
                 setTimeout(updateStatus, 1000);
-            });
+            }).catch(e => addLog('Stop failed: ' + e, 'error'));
         }
 
         function sendCmd() {
@@ -690,7 +747,7 @@ HTML = """<!DOCTYPE html>
             fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({command: cmd})})
                 .then(r => r.json()).then(d => {
                     addLog(d.message, d.status === 'success' ? 'success' : 'error');
-                });
+                }).catch(e => addLog('Command failed: ' + e, 'error'));
             document.getElementById('cmdInput').value = '';
         }
 
@@ -708,7 +765,7 @@ HTML = """<!DOCTYPE html>
                     addLog(d.message, d.status === 'success' ? 'success' : 'error');
                     document.getElementById('serverName').value = '';
                     loadServers();
-                });
+                }).catch(e => addLog('Create failed: ' + e, 'error'));
         }
 
         function loadServers() {
@@ -728,7 +785,7 @@ HTML = """<!DOCTYPE html>
                 `).join('');
                 document.getElementById('serverList').innerHTML = html || '<div style="color: #aaa;">No servers</div>';
                 document.getElementById('sysActiveServers').textContent = d.servers.filter(s => s.running).length;
-            });
+            }).catch(e => console.log('Load servers failed:', e));
         }
 
         function startNamed(name, ram) {
@@ -738,7 +795,7 @@ HTML = """<!DOCTYPE html>
                 .then(r => r.json()).then(d => {
                     addLog(d.message, d.status === 'success' ? 'success' : 'error');
                     setTimeout(loadServers, 1000);
-                });
+                }).catch(e => addLog('Start failed: ' + e, 'error'));
         }
 
         function stopNamed(name) {
@@ -748,7 +805,7 @@ HTML = """<!DOCTYPE html>
                     addLog(d.message, d.status === 'success' ? 'success' : 'error');
                     if (activeServer === name) activeServer = null;
                     setTimeout(loadServers, 1000);
-                });
+                }).catch(e => addLog('Stop failed: ' + e, 'error'));
         }
 
         function manageServer(name) {
@@ -767,7 +824,7 @@ HTML = """<!DOCTYPE html>
                     opt.textContent = s.name;
                     select.appendChild(opt);
                 });
-            });
+            }).catch(e => console.log('Load server options failed:', e));
         }
 
         function loadServerFiles() {
@@ -792,7 +849,7 @@ HTML = """<!DOCTYPE html>
                         `).join('');
                         document.getElementById('fileList').innerHTML = html || '<div style="color: #aaa;">Empty</div>';
                     }
-                });
+                }).catch(e => console.log('Load files failed:', e));
         }
 
         function uploadFiles() {
@@ -819,7 +876,7 @@ HTML = """<!DOCTYPE html>
                     addLog(d.message, d.status === 'success' ? 'success' : 'error');
                     document.getElementById('fileInput').value = '';
                     loadServerFiles();
-                });
+                }).catch(e => addLog('Upload failed: ' + e, 'error'));
         }
 
         function deleteFile(server, filename) {
@@ -829,7 +886,7 @@ HTML = """<!DOCTYPE html>
                 .then(r => r.json()).then(d => {
                     addLog(d.message, d.status === 'success' ? 'success' : 'error');
                     loadServerFiles();
-                });
+                }).catch(e => addLog('Delete failed: ' + e, 'error'));
         }
 
         function initCmds() {
@@ -875,79 +932,3 @@ HTML = """<!DOCTYPE html>
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80, debug=False)
-                        <input type="range" id="ramSlider" min="512" max="8192" step="256" value="2048" disabled>
-                        <div style="color: #aaa; font-size: 0.9em;"><span id="ramValue">2048</span> MB</div>
-                    </div>
-
-                    <div class="button-row" style="margin-top: 30px;">
-                        <button class="btn-success" id="startBtn" onclick="startServer()">START SERVER</button>
-                        <button class="btn-danger" id="stopBtn" onclick="stopServer()" disabled>STOP SERVER</button>
-                    </div>
-
-                    <div style="margin-top: 30px;">
-                        <div class="control-label">COMMAND INPUT</div>
-                        <div class="console-input">
-                            <input type="text" id="cmdInput" placeholder="Enter command...">
-                            <button class="btn-primary" onclick="sendCmd()">SEND</button>
-                        </div>
-                    </div>
-
-                    <div style="margin-top: 30px;">
-                        <div class="control-label">ACTIVITY LOG</div>
-                        <div class="log" id="logBox"></div>
-                    </div>
-                </div>
-            </div>
-
-            <div id="servers-tab" class="tab-content" style="display: none;">
-                <div class="content-panel">
-                    <div class="panel-title">Active Servers</div>
-                    <div class="server-list" id="serverList">
-                        <div style="color: #aaa;">No servers running</div>
-                    </div>
-                </div>
-            </div>
-
-            <div id="create-tab" class="tab-content" style="display: none;">
-                <div class="content-panel">
-                    <div class="panel-title">Create New Server</div>
-                    
-                    <div class="control-section">
-                        <div class="control-label">SERVER NAME</div>
-                        <input type="text" id="serverName" placeholder="e.g., Cammc">
-                    </div>
-
-                    <div class="control-section">
-                        <div class="control-label">SERVER VERSION</div>
-                        <select id="serverVersion">
-                            <optgroup label="1.21+">
-                                <option value="1.21.8">1.21.8</option>
-                                <option value="1.21.7">1.21.7</option>
-                                <option value="1.21.1">1.21.1</option>
-                                <option value="1.21">1.21</option>
-                            </optgroup>
-                            <optgroup label="1.20+">
-                                <option value="1.20.1">1.20.1</option>
-                                <option value="1.20">1.20</option>
-                            </optgroup>
-                            <optgroup label="1.19+">
-                                <option value="1.19.3">1.19.3</option>
-                                <option value="1.19.2">1.19.2</option>
-                            </optgroup>
-                            <optgroup label="1.18+">
-                                <option value="1.18.2">1.18.2</option>
-                            </optgroup>
-                            <optgroup label="1.16+">
-                                <option value="1.16.5">1.16.5</option>
-                            </optgroup>
-                            <optgroup label="1.12+">
-                                <option value="1.12.2">1.12.2</option>
-                            </optgroup>
-                            <optgroup label="1.8+">
-                                <option value="1.8.8">1.8.8</option>
-                            </optgroup>
-                        </select>
-                    </div>
-
-                    <div class="control-section">
-                        <div class="control-label">RAM ALLOCATION</div>
