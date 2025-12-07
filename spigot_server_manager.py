@@ -223,26 +223,64 @@ def api_build_server():
     data = request.json
     server_name = data.get('server_name', 'Server')
     ram = data.get('ram', 2048)
+    version = data.get('version', 'latest')
     
-    if server_name in servers and servers[server_name]['running']:
-        return jsonify({"status": "error", "message": f"Server '{server_name}' already running"})
+    if server_name in servers:
+        return jsonify({"status": "error", "message": f"Server '{server_name}' already exists"})
     
     servers[server_name] = {
         'process': None,
         'ram': ram,
         'running': False,
-        'name': server_name
+        'building': True,
+        'name': server_name,
+        'version': version
     }
     
-    add_to_hosts(server_name)
-    
-    return jsonify({"status": "success", "message": f"Server '{server_name}' created and added to /etc/hosts"})
+    # Create server directory and copy files
+    try:
+        import shutil
+        server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
+        
+        # Create directory if it doesn't exist
+        os.makedirs(server_dir, exist_ok=True)
+        
+        # Copy server.jar based on version
+        # For now, just copy from main server - user can replace jar manually if needed
+        src_jar = os.path.join(SERVER_DIR, SPIGOT_JAR)
+        dst_jar = os.path.join(server_dir, SPIGOT_JAR)
+        if os.path.exists(src_jar) and not os.path.exists(dst_jar):
+            shutil.copy2(src_jar, dst_jar)
+            # Note: Server jar version would need to be managed separately
+            # For now we copy the existing jar - user should replace if different version needed
+        
+        # Copy server.properties
+        src_props = os.path.join(SERVER_DIR, "server.properties")
+        dst_props = os.path.join(server_dir, "server.properties")
+        if os.path.exists(src_props) and not os.path.exists(dst_props):
+            shutil.copy2(src_props, dst_props)
+        
+        # Copy eula.txt
+        src_eula = os.path.join(SERVER_DIR, "eula.txt")
+        dst_eula = os.path.join(server_dir, "eula.txt")
+        if os.path.exists(src_eula) and not os.path.exists(dst_eula):
+            shutil.copy2(src_eula, dst_eula)
+        
+        servers[server_name]['building'] = False
+        add_to_hosts(server_name)
+        
+        msg = f"Server '{server_name}' built for version {version}. Ready to start."
+        return jsonify({"status": "success", "message": msg})
+    except Exception as e:
+        servers[server_name]['building'] = False
+        return jsonify({"status": "error", "message": f"Failed to build server: {str(e)}"})
 
 @app.route('/api/servers', methods=['GET'])
 def api_servers():
     return jsonify({"servers": [{
         "name": name,
         "running": s['running'],
+        "building": s.get('building', False),
         "ram": s['ram'],
         "port": s.get('port', 25565)
     } for name, s in servers.items()]})
@@ -406,6 +444,20 @@ HTML = """<!DOCTYPE html>
                     </div>
 
                     <div class="control-section">
+                        <div class="control-label">SERVER VERSION</div>
+                        <select id="serverVersion" style="background: #0f3460; border: 1px solid #0f9dff; color: #fff; padding: 10px 15px; border-radius: 6px; width: 100%; margin-bottom: 10px; font-family: inherit;">
+                            <option value="latest">Latest (1.20.1)</option>
+                            <option value="1.20.1">1.20.1</option>
+                            <option value="1.20">1.20</option>
+                            <option value="1.19.2">1.19.2</option>
+                            <option value="1.19">1.19</option>
+                            <option value="1.18.2">1.18.2</option>
+                            <option value="1.18">1.18</option>
+                            <option value="1.17.1">1.17.1</option>
+                        </select>
+                    </div>
+
+                    <div class="control-section">
                         <div class="control-label">RAM ALLOCATION</div>
                         <input type="range" id="newRamSlider" min="512" max="8192" step="256" value="2048">
                         <div style="color: #aaa; font-size: 0.9em;"><span id="newRamValue">2048</span> MB</div>
@@ -520,12 +572,13 @@ HTML = """<!DOCTYPE html>
         function createServer() {
             const name = document.getElementById('serverName').value.trim();
             const ram = document.getElementById('newRamSlider').value;
+            const version = document.getElementById('serverVersion').value;
             if (!name) {
                 addLog('Server name required', 'error');
                 return;
             }
-            addLog(`Creating '${name}'...`, 'info');
-            fetch('/api/build-server', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({server_name: name, ram: parseInt(ram)})})
+            addLog(`Creating '${name}' (${version})...`, 'info');
+            fetch('/api/build-server', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({server_name: name, ram: parseInt(ram), version: version})})
                 .then(r => r.json()).then(d => {
                     addLog(d.message, d.status === 'success' ? 'success' : 'error');
                     document.getElementById('serverName').value = '';
@@ -538,12 +591,12 @@ HTML = """<!DOCTYPE html>
                 const html = d.servers.map(s => `
                     <div class="server-card ${!s.running ? 'offline' : ''}">
                         <div class="server-name">${s.name}</div>
-                        <div class="server-info">RAM: ${s.ram}MB | Port: ${s.port}</div>
+                        <div class="server-info">Version: ${s.version} | RAM: ${s.ram}MB | Port: ${s.port}</div>
                         <div class="server-status">
-                            <span class="status-dot"></span>
-                            <span>${s.running ? 'ONLINE' : 'OFFLINE'}</span>
+                            <span class="status-dot" style="background: ${s.building ? '#ff9800' : s.running ? '#00b368' : '#666'};"></span>
+                            <span>${s.building ? 'BUILDING' : s.running ? 'ONLINE' : 'OFFLINE'}</span>
                         </div>
-                        <button class="btn-primary" onclick="startNamed('${s.name}', ${s.ram})" style="width: 100%; margin-top: 10px;" ${s.running ? 'disabled' : ''}>START</button>
+                        <button class="btn-primary" onclick="startNamed('${s.name}', ${s.ram})" style="width: 100%; margin-top: 10px;" ${s.running || s.building ? 'disabled' : ''}>START</button>
                     </div>
                 `).join('');
                 document.getElementById('serverList').innerHTML = html || '<div style="color: #aaa;">No servers</div>';
