@@ -1,218 +1,4 @@
-function manageServer(name) {
-            activeServer = name;
-            document.querySelector('[data-tab="console"]').click();
-            addLog(`Now managing: ${name}`, 'info');
-        }
-
-        function loadServerOptions() {
-            fetch('/api/servers').then(r => r.json()).then(d => {
-                const select = document.getElementById('fileServerSelect');
-                select.innerHTML = '<option value="">Choose a server...</option>';
-                d.servers.forEach(s => {
-                    const opt = document.createElement('option');
-                    opt.value = s.name;
-                    opt.textContent = s.name;
-                    select.appendChild(opt);
-                });
-            });
-        }
-
-        function loadServerFiles() {
-            const server = document.getElementById('fileServerSelect').value;
-            if (!server) {
-                document.getElementById('fileManager').style.display = 'none';
-                return;
-            }
-            document.getElementById('fileManager').style.display = 'block';
-            
-            fetch(`/api/server-files/${server}`)
-                .then(r => r.json()).then(d => {
-                    if (d.files) {
-                        const html = d.files.map(f => `
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: rgba(15, 157, 255, 0.1); margin-bottom: 8px; border-radius: 4px;">
-                                <div>
-                                    <div style="color: #60a5fa; font-weight: 600;">${f.isDir ? '📁' : '📄'} ${f.name}</div>
-                                    <div style="color: #aaa; font-size: 0.8em;">${f.isDir ? 'Folder' : (f.size / 1024).toFixed(2) + ' KB'}</div>
-                                </div>
-                                ${!f.isDir ? `<button class="btn-danger" onclick="deleteFile('${server}', '${f.name}')" style="padding: 8px 12px; font-size: 0.85em;">DELETE</button>` : ''}
-                            </div>
-                        `).join('');
-                        document.getElementById('fileList').innerHTML = html || '<div style="color: #aaa;">Empty</div>';
-                    }
-                });
-        }
-
-        function uploadFiles() {
-            const server = document.getElementById('fileServerSelect').value;
-            const files = document.getElementById('fileInput').files;
-            
-            if (!server) {
-                addLog('Select a server first', 'error');
-                return;
-            }
-            if (files.length === 0) {
-                addLog('Select files to upload', 'error');
-                return;
-            }
-            
-            const formData = new FormData();
-            for (let file of files) {
-                formData.append('files', file);
-            }
-            
-            addLog(`Uploading ${files.length} file(s) to ${server}...`, 'info');
-            fetch(`/api/upload/${server}`, {method: 'POST', body: formData})
-                .then(r => r.json()).then(d => {
-                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
-                    document.getElementById('fileInput').value = '';
-                    loadServerFiles();
-                });
-        }
-
-        function deleteFile(server, filename) {
-            if (!confirm(`Delete ${filename}?`)) return;
-            addLog(`Deleting ${filename}...`, 'info');
-            fetch(`/api/delete-file/${server}/${filename}`, {method: 'DELETE'})
-                .then(r => r.json()).then(d => {
-                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
-                    loadServerFiles();
-                });
-        }
-
-        function initCmds() {@app.route('/api/stop-named/<server_name>', methods=['POST'])
-def api_stop_named(server_name):
-    if server_name not in servers:
-        return jsonify({"status": "error", "message": f"Server '{server_name}' not found"})
-    
-    server_info = servers[server_name]
-    if not server_info['running'] or not server_info['process']:
-        return jsonify({"status": "error", "message": f"Server '{server_name}' not running"})
-    
-    try:
-        server_info['process'].stdin.write("stop\n")
-        server_info['process'].stdin.flush()
-        server_info['process'].wait(timeout=30)
-        server_info['running'] = False
-        return jsonify({"status": "success", "message": f"Server '{server_name}' stopped"})
-    except subprocess.TimeoutExpired:
-        server_info['process'].kill()
-        server_info['running'] = False
-        return jsonify({"status": "success", "message": f"Server '{server_name}' force stopped"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-
-@app.route('/api/server-files/<server_name>', methods=['GET'])
-def api_server_files(server_name):
-    """List files in server directory"""
-    if server_name not in servers:
-        return jsonify({"status": "error", "message": "Server not found"}), 404
-    
-    server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
-    if not os.path.exists(server_dir):
-        return jsonify({"status": "error", "message": "Server directory not found"}), 404
-    
-    try:
-        files = []
-        for item in os.listdir(server_dir):
-            path = os.path.join(server_dir, item)
-            is_dir = os.path.isdir(path)
-            size = 0 if is_dir else os.path.getsize(path)
-            files.append({
-                'name': item,
-                'isDir': is_dir,
-                'size': size
-            })
-        return jsonify({"files": sorted(files, key=lambda x: (not x['isDir'], x['name']))})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/api/upload/<server_name>', methods=['POST'])
-def api_upload(server_name):
-    """Upload files to server"""
-    if server_name not in servers:
-        return jsonify({"status": "error", "message": "Server not found"}), 404
-    
-    server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
-    if not os.path.exists(server_dir):
-        return jsonify({"status": "error", "message": "Server directory not found"}), 404
-    
-    try:
-        uploaded = []
-        for file in request.files.getlist('files'):
-            if file.filename:
-                filename = os.path.basename(file.filename)
-                filepath = os.path.join(server_dir, filename)
-                file.save(filepath)
-                uploaded.append(filename)
-        
-        return jsonify({"status": "success", "message": f"Uploaded {len(uploaded)} file(s)", "files": uploaded})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/api/delete-file/<server_name>/<filename>', methods=['DELETE'])
-def api_delete_file(server_name, filename):
-    """Delete a file from server"""
-    if server_name not in servers:
-        return jsonify({"status": "error", "message": "Server not found"}), 404
-    
-    server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
-    filepath = os.path.join(server_dir, filename)
-    
-    # Security check - make sure path is within server dir
-    if not os.path.abspath(filepath).startswith(os.path.abspath(server_dir)):
-        return jsonify({"status": "error", "message": "Invalid path"}), 403
-    
-    try:
-        if os.path.isfile(filepath):
-            os.remove(filepath)
-            return jsonify({"status": "success", "message": f"Deleted {filename}"})
-        else:
-            return jsonify({"status": "error", "message": "File not found"}), 404
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=80, debug=False)@app.route('/api/start-named', methods=['POST'])
-def api_start_named():
-    data = request.json
-    server_name = data.get('server_name')
-    ram = data.get('ram', 2048)
-    result = start_named_server(server_name, ram)
-    return jsonify(result)
-
-@app.route('/api/stop-named/<server_name>', methods=['POST'])
-def api_stop_named(server_name):
-    if server_name not in servers:
-        return jsonify({"status": "error", "message": f"Server '{server_name}' not found"})
-    
-    server_info = servers[server_name]
-    if not server_info['running'] or not server_info['process']:
-        return jsonify({"status": "error", "message": f"Server '{server_name}' not running"})
-    
-    try:
-        server_info['process'].stdin.write("stop\n")
-        server_info['process'].stdin.flush()
-        server_info['process'].wait(timeout=30)
-        server_info['running'] = False
-        return jsonify({"status": "success", "message": f"Server '{server_name}' stopped"})
-    except subprocess.TimeoutExpired:
-        server_info['process'].kill()
-        server_info['running'] = False
-        return jsonify({"status": "success", "message": f"Server '{server_name}' force stopped"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})@app.route('/api/command', methods=['POST'])
-def api_command():
-    data = request.json
-    cmd = data.get('command', '')
-    return jsonify(run_command(cmd))
-
-@app.route('/api/command-named/<server_name>', methods=['POST'])
-def api_command_named(server_name):
-    data = request.json
-    cmd = data.get('command', '')
-    return jsonify(run_command_on_server(server_name, cmd))
-
-@app.route('/api/build-server', methods=['POST'])#!/usr/bin/env python3
+#!/usr/bin/env python3
 from flask import Flask, render_template_string, request, jsonify
 from flask_cors import CORS
 import psutil
@@ -390,6 +176,14 @@ def update_server_properties(props_file, server_name, port):
     except Exception as e:
         print(f"[ERROR] Could not update server.properties: {e}")
 
+def get_next_available_port():
+    """Get next available port starting from 25565"""
+    used_ports = {s.get('port', 25565) for s in servers.values() if s.get('port')}
+    port = 25565
+    while port in used_ports:
+        port += 1
+    return port
+
 def start_named_server(server_name, ram_mb):
     """Start a named server instance"""
     if server_name not in servers:
@@ -400,7 +194,7 @@ def start_named_server(server_name, ram_mb):
         return {"status": "error", "message": f"Server '{server_name}' already running"}
     
     server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
-    port = 25565 + len([s for s in servers.values() if s['running']])
+    port = get_next_available_port()
     
     cmd = ["java", f"-Xmx{ram_mb}M", f"-Xms{ram_mb//2}M", "-jar", SPIGOT_JAR, "nogui"]
     
@@ -447,6 +241,14 @@ def api_command():
     data = request.json
     cmd = data.get('command', '')
     return jsonify(run_command(cmd))
+
+@app.route('/api/command-named/<server_name>', methods=['POST'])
+def api_command_named(server_name):
+    data = request.json
+    cmd = data.get('command', '')
+    return jsonify(run_command_on_server(server_name, cmd))
+
+@app.route('/api/build-server', methods=['POST'])
 def api_build_server():
     data = request.json
     server_name = data.get('server_name', 'Server')
@@ -465,30 +267,22 @@ def api_build_server():
         'version': version
     }
     
-    # Create server directory and copy files
     try:
         import shutil
         server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
         
-        # Create directory if it doesn't exist
         os.makedirs(server_dir, exist_ok=True)
         
-        # Copy server.jar based on version
-        # For now, just copy from main server - user can replace jar manually if needed
         src_jar = os.path.join(SERVER_DIR, SPIGOT_JAR)
         dst_jar = os.path.join(server_dir, SPIGOT_JAR)
         if os.path.exists(src_jar) and not os.path.exists(dst_jar):
             shutil.copy2(src_jar, dst_jar)
-            # Note: Server jar version would need to be managed separately
-            # For now we copy the existing jar - user should replace if different version needed
         
-        # Copy server.properties
         src_props = os.path.join(SERVER_DIR, "server.properties")
         dst_props = os.path.join(server_dir, "server.properties")
         if os.path.exists(src_props) and not os.path.exists(dst_props):
             shutil.copy2(src_props, dst_props)
         
-        # Copy eula.txt
         src_eula = os.path.join(SERVER_DIR, "eula.txt")
         dst_eula = os.path.join(server_dir, "eula.txt")
         if os.path.exists(src_eula) and not os.path.exists(dst_eula):
@@ -510,7 +304,8 @@ def api_servers():
         "running": s['running'],
         "building": s.get('building', False),
         "ram": s['ram'],
-        "port": s.get('port', 25565)
+        "port": s.get('port', 25565),
+        "version": s.get('version', 'unknown')
     } for name, s in servers.items()]})
 
 @app.route('/api/start-named', methods=['POST'])
@@ -520,6 +315,117 @@ def api_start_named():
     ram = data.get('ram', 2048)
     result = start_named_server(server_name, ram)
     return jsonify(result)
+
+@app.route('/api/stop-named/<server_name>', methods=['POST'])
+def api_stop_named(server_name):
+    if server_name not in servers:
+        return jsonify({"status": "error", "message": f"Server '{server_name}' not found"})
+    
+    server_info = servers[server_name]
+    if not server_info['running'] or not server_info['process']:
+        return jsonify({"status": "error", "message": f"Server '{server_name}' not running"})
+    
+    try:
+        server_info['process'].stdin.write("stop\n")
+        server_info['process'].stdin.flush()
+        server_info['process'].wait(timeout=30)
+        server_info['running'] = False
+        return jsonify({"status": "success", "message": f"Server '{server_name}' stopped"})
+    except subprocess.TimeoutExpired:
+        server_info['process'].kill()
+        server_info['running'] = False
+        return jsonify({"status": "success", "message": f"Server '{server_name}' force stopped"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/server-files/<server_name>', methods=['GET'])
+def api_server_files(server_name):
+    """List files in server directory"""
+    if server_name not in servers:
+        return jsonify({"status": "error", "message": "Server not found"}), 404
+    
+    server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
+    if not os.path.exists(server_dir):
+        return jsonify({"status": "error", "message": "Server directory not found"}), 404
+    
+    try:
+        files = []
+        for item in os.listdir(server_dir):
+            path = os.path.join(server_dir, item)
+            is_dir = os.path.isdir(path)
+            size = 0 if is_dir else os.path.getsize(path)
+            files.append({
+                'name': item,
+                'isDir': is_dir,
+                'size': size
+            })
+        return jsonify({"files": sorted(files, key=lambda x: (not x['isDir'], x['name']))})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/upload/<server_name>', methods=['POST'])
+def api_upload(server_name):
+    """Upload files to server with security checks"""
+    if server_name not in servers:
+        return jsonify({"status": "error", "message": "Server not found"}), 404
+    
+    server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
+    if not os.path.exists(server_dir):
+        return jsonify({"status": "error", "message": "Server directory not found"}), 404
+    
+    try:
+        uploaded = []
+        for file in request.files.getlist('files'):
+            if file.filename:
+                # Security: Sanitize filename
+                filename = os.path.basename(file.filename)
+                filename = filename.replace('/', '').replace('\\', '')
+                
+                if not filename or filename.startswith('.'):
+                    continue
+                
+                filepath = os.path.join(server_dir, filename)
+                
+                # Double-check path is within server directory
+                if not os.path.abspath(filepath).startswith(os.path.abspath(server_dir)):
+                    continue
+                
+                # File size limit (100MB)
+                file.seek(0, 2)
+                size = file.tell()
+                file.seek(0)
+                
+                if size > 100 * 1024 * 1024:
+                    return jsonify({"status": "error", "message": f"File {filename} too large (max 100MB)"}), 413
+                
+                file.save(filepath)
+                uploaded.append(filename)
+        
+        return jsonify({"status": "success", "message": f"Uploaded {len(uploaded)} file(s)", "files": uploaded})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/delete-file/<server_name>/<filename>', methods=['DELETE'])
+def api_delete_file(server_name, filename):
+    """Delete a file from server"""
+    if server_name not in servers:
+        return jsonify({"status": "error", "message": "Server not found"}), 404
+    
+    server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
+    filepath = os.path.join(server_dir, filename)
+    
+    # Security check
+    if not os.path.abspath(filepath).startswith(os.path.abspath(server_dir)):
+        return jsonify({"status": "error", "message": "Invalid path"}), 403
+    
+    try:
+        if os.path.isfile(filepath):
+            os.remove(filepath)
+            return jsonify({"status": "success", "message": f"Deleted {filename}"})
+        else:
+            return jsonify({"status": "error", "message": "File not found"}), 404
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 HTML = """<!DOCTYPE html>
 <html>
@@ -551,7 +457,7 @@ HTML = """<!DOCTYPE html>
         .control-section { margin-top: 20px; }
         .control-label { color: #aaa; font-size: 0.85em; margin-bottom: 10px; font-weight: 600; }
         input[type="range"] { width: 100%; margin-bottom: 10px; }
-        input[type="text"], input[type="number"] { background: #0f3460; border: 1px solid #0f9dff; color: #fff; padding: 10px 15px; border-radius: 6px; width: 100%; margin-bottom: 10px; font-family: inherit; }
+        input[type="text"], input[type="number"], input[type="file"] { background: #0f3460; border: 1px solid #0f9dff; color: #fff; padding: 10px 15px; border-radius: 6px; width: 100%; margin-bottom: 10px; font-family: inherit; }
         input[type="text"]:focus, input[type="number"]:focus { outline: none; border-color: #00d4ff; box-shadow: 0 0 10px rgba(15, 157, 255, 0.3); }
         .button-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
         button { padding: 12px 20px; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; transition: all 0.2s; font-size: 0.95em; }
@@ -579,6 +485,7 @@ HTML = """<!DOCTYPE html>
         .log-error { color: #ff6666; }
         .log-info { color: #aaa; }
         .log-cmd { color: #0f9dff; }
+        select { background: #0f3460; border: 1px solid #0f9dff; color: #fff; padding: 10px 15px; border-radius: 6px; width: 100%; margin-bottom: 10px; font-family: inherit; }
     </style>
 </head>
 <body>
@@ -593,7 +500,6 @@ HTML = """<!DOCTYPE html>
             <h3>Settings</h3>
             <a class="nav-item" data-tab="system">⚙️ System</a>
             <a class="nav-item" data-tab="files">📁 File Manager</a>
-            <a class="nav-item" data-tab="logs">📊 Logs</a>
         </div>
 
         <div class="main">
@@ -606,7 +512,6 @@ HTML = """<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- Console Tab -->
             <div id="console-tab" class="tab-content">
                 <div class="content-panel">
                     <div class="panel-title">Console</div>
@@ -628,143 +533,6 @@ HTML = """<!DOCTYPE html>
 
                     <div class="control-section">
                         <div class="control-label">RAM ALLOCATION</div>
-                        <input type="range" id="ramSlider" min="512" max="8192" step="256" value="2048" disabled>
-                        <div style="color: #aaa; font-size: 0.9em;"><span id="ramValue">2048</span> MB</div>
-                    </div>
-
-                    <div class="button-row" style="margin-top: 30px;">
-                        <button class="btn-success" id="startBtn" onclick="startServer()">START SERVER</button>
-                        <button class="btn-danger" id="stopBtn" onclick="stopServer()" disabled>STOP SERVER</button>
-                    </div>
-
-                    <div style="margin-top: 30px;">
-                        <div class="control-label">COMMAND INPUT</div>
-                        <div class="console-input">
-                            <input type="text" id="cmdInput" placeholder="Enter command...">
-                            <button class="btn-primary" onclick="sendCmd()">SEND</button>
-                        </div>
-                    </div>
-
-                    <div style="margin-top: 30px;">
-                        <div class="control-label">ACTIVITY LOG</div>
-                        <div class="log" id="logBox"></div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Servers Tab -->
-            <div id="servers-tab" class="tab-content" style="display: none;">
-                <div class="content-panel">
-                    <div class="panel-title">Active Servers</div>
-                    <div class="server-list" id="serverList">
-                        <div style="color: #aaa;">No servers running</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Create Server Tab -->
-            <div id="create-tab" class="tab-content" style="display: none;">
-                <div class="content-panel">
-                    <div class="panel-title">Create New Server</div>
-                    
-                    <div class="control-section">
-                        <div class="control-label">SERVER NAME</div>
-                        <input type="text" id="serverName" placeholder="e.g., Cammc">
-                    </div>
-
-                    <div class="control-section">
-                        <div class="control-label">SERVER VERSION</div>
-                        <select id="serverVersion" style="background: #0f3460; border: 1px solid #0f9dff; color: #fff; padding: 10px 15px; border-radius: 6px; width: 100%; margin-bottom: 10px; font-family: inherit;">
-                            <optgroup label="1.21+">
-                                <option value="1.21.8">1.21.8</option>
-                                <option value="1.21.7">1.21.7</option>
-                                <option value="1.21.6">1.21.6</option>
-                                <option value="1.21.5">1.21.5</option>
-                                <option value="1.21.4">1.21.4</option>
-                                <option value="1.21.3">1.21.3</option>
-                                <option value="1.21.2">1.21.2</option>
-                                <option value="1.21.1">1.21.1</option>
-                                <option value="1.21">1.21</option>
-                            </optgroup>
-                            <optgroup label="1.20+">
-                                <option value="1.20.1">1.20.1</option>
-                                <option value="1.20">1.20</option>
-                            </optgroup>
-                            <optgroup label="1.19+">
-                                <option value="1.19.3">1.19.3</option>
-                                <option value="1.19.2">1.19.2</option>
-                                <option value="1.19.1">1.19.1</option>
-                                <option value="1.19">1.19</option>
-                            </optgroup>
-                            <optgroup label="1.18+">
-                                <option value="1.18.2">1.18.2</option>
-                                <option value="1.18.1">1.18.1</option>
-                                <option value="1.18">1.18</option>
-                            </optgroup>
-                            <optgroup label="1.17+">
-                                <option value="1.17.1">1.17.1</option>
-                                <option value="1.17">1.17</option>
-                            </optgroup>
-                            <optgroup label="1.16+">
-                                <option value="1.16.5">1.16.5</option>
-                                <option value="1.16.4">1.16.4</option>
-                                <option value="1.16.3">1.16.3</option>
-                                <option value="1.16.2">1.16.2</option>
-                                <option value="1.16.1">1.16.1</option>
-                                <option value="1.16">1.16</option>
-                            </optgroup>
-                            <optgroup label="1.15+">
-                                <option value="1.15.2">1.15.2</option>
-                                <option value="1.15.1">1.15.1</option>
-                                <option value="1.15">1.15</option>
-                            </optgroup>
-                            <optgroup label="1.14+">
-                                <option value="1.14.4">1.14.4</option>
-                                <option value="1.14.3">1.14.3</option>
-                                <option value="1.14.2">1.14.2</option>
-                                <option value="1.14.1">1.14.1</option>
-                                <option value="1.14">1.14</option>
-                            </optgroup>
-                            <optgroup label="1.13+">
-                                <option value="1.13.2">1.13.2</option>
-                                <option value="1.13.1">1.13.1</option>
-                                <option value="1.13">1.13</option>
-                            </optgroup>
-                            <optgroup label="1.12+">
-                                <option value="1.12.2">1.12.2</option>
-                                <option value="1.12.1">1.12.1</option>
-                                <option value="1.12">1.12</option>
-                            </optgroup>
-                            <optgroup label="1.11+">
-                                <option value="1.11.2">1.11.2</option>
-                                <option value="1.11.1">1.11.1</option>
-                                <option value="1.11">1.11</option>
-                            </optgroup>
-                            <optgroup label="1.10+">
-                                <option value="1.10.2">1.10.2</option>
-                                <option value="1.10.1">1.10.1</option>
-                                <option value="1.10">1.10</option>
-                            </optgroup>
-                            <optgroup label="1.9+">
-                                <option value="1.9.4">1.9.4</option>
-                                <option value="1.9.3">1.9.3</option>
-                                <option value="1.9.2">1.9.2</option>
-                                <option value="1.9.1">1.9.1</option>
-                                <option value="1.9">1.9</option>
-                            </optgroup>
-                            <optgroup label="1.8+">
-                                <option value="1.8.8">1.8.8</option>
-                                <option value="1.8.7">1.8.7</option>
-                                <option value="1.8.6">1.8.6</option>
-                                <option value="1.8.5">1.8.5</option>
-                                <option value="1.8.4">1.8.4</option>
-                                <option value="1.8.3">1.8.3</option>
-                            </optgroup>
-                        </select>
-                    </div>
-
-                    <div class="control-section">
-                        <div class="control-label">RAM ALLOCATION</div>
                         <input type="range" id="newRamSlider" min="512" max="8192" step="256" value="2048">
                         <div style="color: #aaa; font-size: 0.9em;"><span id="newRamValue">2048</span> MB</div>
                     </div>
@@ -773,7 +541,6 @@ HTML = """<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- Quick Commands Tab -->
             <div id="commands-tab" class="tab-content" style="display: none;">
                 <div class="content-panel">
                     <div class="panel-title">Quick Commands</div>
@@ -781,14 +548,13 @@ HTML = """<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- File Manager Tab -->
             <div id="files-tab" class="tab-content" style="display: none;">
                 <div class="content-panel">
                     <div class="panel-title">File Manager</div>
                     
                     <div class="control-section">
                         <div class="control-label">SELECT SERVER</div>
-                        <select id="fileServerSelect" style="background: #0f3460; border: 1px solid #0f9dff; color: #fff; padding: 10px 15px; border-radius: 6px; width: 100%; margin-bottom: 10px; font-family: inherit;" onchange="loadServerFiles()">
+                        <select id="fileServerSelect" onchange="loadServerFiles()">
                             <option value="">Choose a server...</option>
                         </select>
                     </div>
@@ -796,7 +562,7 @@ HTML = """<!DOCTYPE html>
                     <div id="fileManager" style="display: none;">
                         <div class="control-section">
                             <div class="control-label">UPLOAD FILES</div>
-                            <input type="file" id="fileInput" multiple style="margin-bottom: 10px; color: #aaa;">
+                            <input type="file" id="fileInput" multiple>
                             <button class="btn-primary" onclick="uploadFiles()" style="width: 100%;">UPLOAD</button>
                         </div>
 
@@ -805,6 +571,22 @@ HTML = """<!DOCTYPE html>
                             <div style="background: #0f3460; border: 1px solid #0f9dff; border-radius: 6px; padding: 15px; max-height: 400px; overflow-y: auto;">
                                 <div id="fileList" style="color: #aaa;">Loading files...</div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="system-tab" class="tab-content" style="display: none;">
+                <div class="content-panel">
+                    <div class="panel-title">System Information</div>
+                    <div class="stat-grid">
+                        <div class="stat-card">
+                            <div class="stat-label">Total RAM</div>
+                            <div class="stat-value" id="sysTotalRam">0 GB</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Active Servers</div>
+                            <div class="stat-value" id="sysActiveServers">0</div>
                         </div>
                     </div>
                 </div>
@@ -837,7 +619,7 @@ HTML = """<!DOCTYPE html>
         };
 
         let logs = [];
-        let activeServer = null;  // Track which named server is running
+        let activeServer = null;
 
         document.querySelectorAll('.nav-item').forEach(item => {
             item.addEventListener('click', () => {
@@ -871,6 +653,7 @@ HTML = """<!DOCTYPE html>
         function getSystemInfo() {
             fetch('/api/system-info').then(r => r.json()).then(d => {
                 document.getElementById('sysRam').textContent = d.total_ram_gb + ' GB';
+                document.getElementById('sysTotalRam').textContent = d.total_ram_gb + ' GB';
                 document.getElementById('ramSlider').max = Math.floor(d.total_ram_mb * 0.75);
                 document.getElementById('newRamSlider').max = Math.floor(d.total_ram_mb * 0.75);
             });
@@ -944,6 +727,7 @@ HTML = """<!DOCTYPE html>
                     </div>
                 `).join('');
                 document.getElementById('serverList').innerHTML = html || '<div style="color: #aaa;">No servers</div>';
+                document.getElementById('sysActiveServers').textContent = d.servers.filter(s => s.running).length;
             });
         }
 
@@ -972,6 +756,83 @@ HTML = """<!DOCTYPE html>
             document.querySelector('[data-tab="console"]').click();
             addLog(`Now managing: ${name}`, 'info');
         }
+
+        function loadServerOptions() {
+            fetch('/api/servers').then(r => r.json()).then(d => {
+                const select = document.getElementById('fileServerSelect');
+                select.innerHTML = '<option value="">Choose a server...</option>';
+                d.servers.forEach(s => {
+                    const opt = document.createElement('option');
+                    opt.value = s.name;
+                    opt.textContent = s.name;
+                    select.appendChild(opt);
+                });
+            });
+        }
+
+        function loadServerFiles() {
+            const server = document.getElementById('fileServerSelect').value;
+            if (!server) {
+                document.getElementById('fileManager').style.display = 'none';
+                return;
+            }
+            document.getElementById('fileManager').style.display = 'block';
+            
+            fetch(`/api/server-files/${server}`)
+                .then(r => r.json()).then(d => {
+                    if (d.files) {
+                        const html = d.files.map(f => `
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: rgba(15, 157, 255, 0.1); margin-bottom: 8px; border-radius: 4px;">
+                                <div>
+                                    <div style="color: #60a5fa; font-weight: 600;">${f.isDir ? '📁' : '📄'} ${f.name}</div>
+                                    <div style="color: #aaa; font-size: 0.8em;">${f.isDir ? 'Folder' : (f.size / 1024).toFixed(2) + ' KB'}</div>
+                                </div>
+                                ${!f.isDir ? `<button class="btn-danger" onclick="deleteFile('${server}', '${f.name}')" style="padding: 8px 12px; font-size: 0.85em;">DELETE</button>` : ''}
+                            </div>
+                        `).join('');
+                        document.getElementById('fileList').innerHTML = html || '<div style="color: #aaa;">Empty</div>';
+                    }
+                });
+        }
+
+        function uploadFiles() {
+            const server = document.getElementById('fileServerSelect').value;
+            const files = document.getElementById('fileInput').files;
+            
+            if (!server) {
+                addLog('Select a server first', 'error');
+                return;
+            }
+            if (files.length === 0) {
+                addLog('Select files to upload', 'error');
+                return;
+            }
+            
+            const formData = new FormData();
+            for (let file of files) {
+                formData.append('files', file);
+            }
+            
+            addLog(`Uploading ${files.length} file(s) to ${server}...`, 'info');
+            fetch(`/api/upload/${server}`, {method: 'POST', body: formData})
+                .then(r => r.json()).then(d => {
+                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
+                    document.getElementById('fileInput').value = '';
+                    loadServerFiles();
+                });
+        }
+
+        function deleteFile(server, filename) {
+            if (!confirm(`Delete ${filename}?`)) return;
+            addLog(`Deleting ${filename}...`, 'info');
+            fetch(`/api/delete-file/${server}/${filename}`, {method: 'DELETE'})
+                .then(r => r.json()).then(d => {
+                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
+                    loadServerFiles();
+                });
+        }
+
+        function initCmds() {
             const grid = document.getElementById('cmdGrid');
             let html = '';
             for (const [cat, cmds] of Object.entries(COMMANDS)) {
@@ -995,6 +856,10 @@ HTML = """<!DOCTYPE html>
             document.getElementById('newRamValue').textContent = e.target.value;
         });
 
+        document.getElementById('cmdInput').addEventListener('keypress', e => {
+            if (e.key === 'Enter') sendCmd();
+        });
+
         getSystemInfo();
         updateStatus();
         loadServers();
@@ -1010,3 +875,79 @@ HTML = """<!DOCTYPE html>
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80, debug=False)
+                        <input type="range" id="ramSlider" min="512" max="8192" step="256" value="2048" disabled>
+                        <div style="color: #aaa; font-size: 0.9em;"><span id="ramValue">2048</span> MB</div>
+                    </div>
+
+                    <div class="button-row" style="margin-top: 30px;">
+                        <button class="btn-success" id="startBtn" onclick="startServer()">START SERVER</button>
+                        <button class="btn-danger" id="stopBtn" onclick="stopServer()" disabled>STOP SERVER</button>
+                    </div>
+
+                    <div style="margin-top: 30px;">
+                        <div class="control-label">COMMAND INPUT</div>
+                        <div class="console-input">
+                            <input type="text" id="cmdInput" placeholder="Enter command...">
+                            <button class="btn-primary" onclick="sendCmd()">SEND</button>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 30px;">
+                        <div class="control-label">ACTIVITY LOG</div>
+                        <div class="log" id="logBox"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="servers-tab" class="tab-content" style="display: none;">
+                <div class="content-panel">
+                    <div class="panel-title">Active Servers</div>
+                    <div class="server-list" id="serverList">
+                        <div style="color: #aaa;">No servers running</div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="create-tab" class="tab-content" style="display: none;">
+                <div class="content-panel">
+                    <div class="panel-title">Create New Server</div>
+                    
+                    <div class="control-section">
+                        <div class="control-label">SERVER NAME</div>
+                        <input type="text" id="serverName" placeholder="e.g., Cammc">
+                    </div>
+
+                    <div class="control-section">
+                        <div class="control-label">SERVER VERSION</div>
+                        <select id="serverVersion">
+                            <optgroup label="1.21+">
+                                <option value="1.21.8">1.21.8</option>
+                                <option value="1.21.7">1.21.7</option>
+                                <option value="1.21.1">1.21.1</option>
+                                <option value="1.21">1.21</option>
+                            </optgroup>
+                            <optgroup label="1.20+">
+                                <option value="1.20.1">1.20.1</option>
+                                <option value="1.20">1.20</option>
+                            </optgroup>
+                            <optgroup label="1.19+">
+                                <option value="1.19.3">1.19.3</option>
+                                <option value="1.19.2">1.19.2</option>
+                            </optgroup>
+                            <optgroup label="1.18+">
+                                <option value="1.18.2">1.18.2</option>
+                            </optgroup>
+                            <optgroup label="1.16+">
+                                <option value="1.16.5">1.16.5</option>
+                            </optgroup>
+                            <optgroup label="1.12+">
+                                <option value="1.12.2">1.12.2</option>
+                            </optgroup>
+                            <optgroup label="1.8+">
+                                <option value="1.8.8">1.8.8</option>
+                            </optgroup>
+                        </select>
+                    </div>
+
+                    <div class="control-section">
+                        <div class="control-label">RAM ALLOCATION</div>
