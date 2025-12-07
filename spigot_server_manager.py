@@ -446,14 +446,91 @@ HTML = """<!DOCTYPE html>
                     <div class="control-section">
                         <div class="control-label">SERVER VERSION</div>
                         <select id="serverVersion" style="background: #0f3460; border: 1px solid #0f9dff; color: #fff; padding: 10px 15px; border-radius: 6px; width: 100%; margin-bottom: 10px; font-family: inherit;">
-                            <option value="latest">Latest (1.20.1)</option>
-                            <option value="1.20.1">1.20.1</option>
-                            <option value="1.20">1.20</option>
-                            <option value="1.19.2">1.19.2</option>
-                            <option value="1.19">1.19</option>
-                            <option value="1.18.2">1.18.2</option>
-                            <option value="1.18">1.18</option>
-                            <option value="1.17.1">1.17.1</option>
+                            <optgroup label="1.21+">
+                                <option value="1.21.8">1.21.8</option>
+                                <option value="1.21.7">1.21.7</option>
+                                <option value="1.21.6">1.21.6</option>
+                                <option value="1.21.5">1.21.5</option>
+                                <option value="1.21.4">1.21.4</option>
+                                <option value="1.21.3">1.21.3</option>
+                                <option value="1.21.2">1.21.2</option>
+                                <option value="1.21.1">1.21.1</option>
+                                <option value="1.21">1.21</option>
+                            </optgroup>
+                            <optgroup label="1.20+">
+                                <option value="1.20.1">1.20.1</option>
+                                <option value="1.20">1.20</option>
+                            </optgroup>
+                            <optgroup label="1.19+">
+                                <option value="1.19.3">1.19.3</option>
+                                <option value="1.19.2">1.19.2</option>
+                                <option value="1.19.1">1.19.1</option>
+                                <option value="1.19">1.19</option>
+                            </optgroup>
+                            <optgroup label="1.18+">
+                                <option value="1.18.2">1.18.2</option>
+                                <option value="1.18.1">1.18.1</option>
+                                <option value="1.18">1.18</option>
+                            </optgroup>
+                            <optgroup label="1.17+">
+                                <option value="1.17.1">1.17.1</option>
+                                <option value="1.17">1.17</option>
+                            </optgroup>
+                            <optgroup label="1.16+">
+                                <option value="1.16.5">1.16.5</option>
+                                <option value="1.16.4">1.16.4</option>
+                                <option value="1.16.3">1.16.3</option>
+                                <option value="1.16.2">1.16.2</option>
+                                <option value="1.16.1">1.16.1</option>
+                                <option value="1.16">1.16</option>
+                            </optgroup>
+                            <optgroup label="1.15+">
+                                <option value="1.15.2">1.15.2</option>
+                                <option value="1.15.1">1.15.1</option>
+                                <option value="1.15">1.15</option>
+                            </optgroup>
+                            <optgroup label="1.14+">
+                                <option value="1.14.4">1.14.4</option>
+                                <option value="1.14.3">1.14.3</option>
+                                <option value="1.14.2">1.14.2</option>
+                                <option value="1.14.1">1.14.1</option>
+                                <option value="1.14">1.14</option>
+                            </optgroup>
+                            <optgroup label="1.13+">
+                                <option value="1.13.2">1.13.2</option>
+                                <option value="1.13.1">1.13.1</option>
+                                <option value="1.13">1.13</option>
+                            </optgroup>
+                            <optgroup label="1.12+">
+                                <option value="1.12.2">1.12.2</option>
+                                <option value="1.12.1">1.12.1</option>
+                                <option value="1.12">1.12</option>
+                            </optgroup>
+                            <optgroup label="1.11+">
+                                <option value="1.11.2">1.11.2</option>
+                                <option value="1.11.1">1.11.1</option>
+                                <option value="1.11">1.11</option>
+                            </optgroup>
+                            <optgroup label="1.10+">
+                                <option value="1.10.2">1.10.2</option>
+                                <option value="1.10.1">1.10.1</option>
+                                <option value="1.10">1.10</option>
+                            </optgroup>
+                            <optgroup label="1.9+">
+                                <option value="1.9.4">1.9.4</option>
+                                <option value="1.9.3">1.9.3</option>
+                                <option value="1.9.2">1.9.2</option>
+                                <option value="1.9.1">1.9.1</option>
+                                <option value="1.9">1.9</option>
+                            </optgroup>
+                            <optgroup label="1.8+">
+                                <option value="1.8.8">1.8.8</option>
+                                <option value="1.8.7">1.8.7</option>
+                                <option value="1.8.6">1.8.6</option>
+                                <option value="1.8.5">1.8.5</option>
+                                <option value="1.8.4">1.8.4</option>
+                                <option value="1.8.3">1.8.3</option>
+                            </optgroup>
                         </select>
                     </div>
 
