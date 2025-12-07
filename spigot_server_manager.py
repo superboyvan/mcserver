@@ -4,11 +4,11 @@ from flask_cors import CORS
 import psutil
 import subprocess
 import os
+import socket
 
 app = Flask(__name__)
 CORS(app)
 
-# Auto-detect server directory
 def get_server_dir():
     if os.path.exists("/home/cam/mcserver/server.jar"):
         return "/home/cam/mcserver"
@@ -21,10 +21,10 @@ SERVER_DIR = get_server_dir()
 SPIGOT_JAR = "server.jar"
 server_process = None
 allocated_ram = 2048
+servers = {}
 
 print(f"[INFO] Using server directory: {SERVER_DIR}")
 
-# Check if server is already running
 def find_existing_server():
     global server_process, allocated_ram
     try:
@@ -45,6 +45,18 @@ def get_system_info():
     total_ram = psutil.virtual_memory().total // (1024**3)
     return {"total_ram_gb": total_ram, "total_ram_mb": total_ram * 1024}
 
+def is_server_running():
+    global server_process
+    if server_process is None:
+        return False
+    if hasattr(server_process, 'poll'):
+        return server_process.poll() is None
+    else:
+        try:
+            return server_process.is_running()
+        except:
+            return False
+
 def start_server(ram_mb):
     global server_process, allocated_ram
     if server_process and is_server_running():
@@ -60,12 +72,10 @@ def start_server(ram_mb):
 
 def stop_server():
     global server_process
-    if not server_process:
+    if not server_process or not is_server_running():
         return {"status": "error", "message": "Server not running"}
     
-    if hasattr(server_process, 'poll'):
-        if server_process.poll() is not None:
-            return {"status": "error", "message": "Server not running"}
+    if hasattr(server_process, 'stdin'):
         try:
             server_process.stdin.write("stop\n")
             server_process.stdin.flush()
@@ -82,19 +92,20 @@ def stop_server():
             server_process.wait(timeout=10)
             return {"status": "success", "message": "Server stopped"}
         except:
-            server_process.kill()
+            try:
+                server_process.kill()
+            except:
+                pass
             return {"status": "success", "message": "Server force stopped"}
 
 def run_command(cmd):
     global server_process
-    if not server_process:
+    if not is_server_running():
         return {"status": "error", "message": "Server not running"}
     
     if not hasattr(server_process, 'stdin'):
         return {"status": "error", "message": "Cannot send commands to existing process"}
     
-    if server_process.poll() is not None:
-        return {"status": "error", "message": "Server not running"}
     try:
         server_process.stdin.write(cmd + "\n")
         server_process.stdin.flush()
@@ -102,14 +113,82 @@ def run_command(cmd):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def is_server_running():
-    global server_process
-    if server_process is None:
-        return False
-    if hasattr(server_process, 'poll'):
-        return server_process.poll() is None
-    else:
-        return server_process.is_running()
+def add_to_hosts(server_name):
+    """Add server name to /etc/hosts"""
+    try:
+        hosts_file = '/etc/hosts'
+        hostname = socket.gethostname()
+        ip = socket.gethostbyname(hostname)
+        
+        with open(hosts_file, 'r') as f:
+            content = f.read()
+            if server_name in content:
+                return
+        
+        entry = f"{ip}    {server_name}\n"
+        with open(hosts_file, 'a') as f:
+            f.write(entry)
+        print(f"[INFO] Added {server_name} to /etc/hosts")
+    except Exception as e:
+        print(f"[WARNING] Could not update /etc/hosts: {e}")
+
+def update_server_properties(props_file, server_name, port):
+    """Update server.properties with custom name and port"""
+    try:
+        with open(props_file, 'r') as f:
+            lines = f.readlines()
+        
+        updated = False
+        new_lines = []
+        
+        for line in lines:
+            if line.startswith('motd='):
+                new_lines.append(f'motd={server_name}\n')
+                updated = True
+            elif line.startswith('server-port='):
+                new_lines.append(f'server-port={port}\n')
+                updated = True
+            else:
+                new_lines.append(line)
+        
+        if not updated or 'motd=' not in ''.join(new_lines):
+            new_lines.append(f'motd={server_name}\n')
+            new_lines.append(f'server-port={port}\n')
+        
+        with open(props_file, 'w') as f:
+            f.writelines(new_lines)
+    except Exception as e:
+        print(f"[ERROR] Could not update server.properties: {e}")
+
+def start_named_server(server_name, ram_mb):
+    """Start a named server instance"""
+    if server_name not in servers:
+        return {"status": "error", "message": f"Server '{server_name}' not found"}
+    
+    server_info = servers[server_name]
+    if server_info['running']:
+        return {"status": "error", "message": f"Server '{server_name}' already running"}
+    
+    server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
+    port = 25565 + len([s for s in servers.values() if s['running']])
+    
+    cmd = ["java", f"-Xmx{ram_mb}M", f"-Xms{ram_mb//2}M", "-jar", SPIGOT_JAR, "nogui"]
+    
+    try:
+        os.chdir(server_dir)
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        server_info['process'] = proc
+        server_info['running'] = True
+        server_info['port'] = port
+        server_info['pid'] = proc.pid
+        
+        props_file = os.path.join(server_dir, "server.properties")
+        if os.path.exists(props_file):
+            update_server_properties(props_file, server_name, port)
+        
+        return {"status": "success", "message": f"Server '{server_name}' started on port {port} with {ram_mb}MB RAM"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 @app.route('/')
 def index():
@@ -139,6 +218,43 @@ def api_command():
     cmd = data.get('command', '')
     return jsonify(run_command(cmd))
 
+@app.route('/api/build-server', methods=['POST'])
+def api_build_server():
+    data = request.json
+    server_name = data.get('server_name', 'Server')
+    ram = data.get('ram', 2048)
+    
+    if server_name in servers and servers[server_name]['running']:
+        return jsonify({"status": "error", "message": f"Server '{server_name}' already running"})
+    
+    servers[server_name] = {
+        'process': None,
+        'ram': ram,
+        'running': False,
+        'name': server_name
+    }
+    
+    add_to_hosts(server_name)
+    
+    return jsonify({"status": "success", "message": f"Server '{server_name}' created and added to /etc/hosts"})
+
+@app.route('/api/servers', methods=['GET'])
+def api_servers():
+    return jsonify({"servers": [{
+        "name": name,
+        "running": s['running'],
+        "ram": s['ram'],
+        "port": s.get('port', 25565)
+    } for name, s in servers.items()]})
+
+@app.route('/api/start-named', methods=['POST'])
+def api_start_named():
+    data = request.json
+    server_name = data.get('server_name')
+    ram = data.get('ram', 2048)
+    result = start_named_server(server_name, ram)
+    return jsonify(result)
+
 HTML = """<!DOCTYPE html>
 <html>
 <head>
@@ -147,257 +263,333 @@ HTML = """<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-            color: #fff;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .header { margin-bottom: 30px; }
-        .header h1 { font-size: 2.5em; margin-bottom: 5px; }
-        .header p { color: #94a3b8; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px; }
-        .stat-box {
-            background: rgba(30, 41, 59, 0.8);
-            border: 1px solid rgba(148, 163, 184, 0.2);
-            border-radius: 12px;
-            padding: 24px;
-            backdrop-filter: blur(10px);
-        }
-        .stat-label { font-size: 0.875em; color: #94a3b8; margin-bottom: 8px; font-weight: 600; }
-        .stat-value { font-size: 2.5em; font-weight: bold; margin-bottom: 5px; }
-        .stat-sub { font-size: 0.875em; color: #64748b; }
-        .main-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
-        .panel {
-            background: rgba(30, 41, 59, 0.8);
-            border: 1px solid rgba(148, 163, 184, 0.2);
-            border-radius: 12px;
-            padding: 24px;
-            backdrop-filter: blur(10px);
-        }
-        .panel h2 { font-size: 1.25em; margin-bottom: 20px; }
-        .slider-group { margin-bottom: 20px; }
-        .slider-label { font-size: 0.875em; color: #94a3b8; margin-bottom: 10px; display: block; }
-        input[type="range"] {
-            width: 100%;
-            height: 6px;
-            border-radius: 3px;
-            background: rgba(100, 116, 139, 0.3);
-            outline: none;
-            -webkit-appearance: none;
-        }
-        input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            width: 18px;
-            height: 18px;
-            border-radius: 50%;
-            background: #3b82f6;
-            cursor: pointer;
-        }
-        input[type="range"]::-moz-range-thumb {
-            width: 18px;
-            height: 18px;
-            border-radius: 50%;
-            background: #3b82f6;
-            cursor: pointer;
-            border: none;
-        }
-        .button-group { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
-        button {
-            padding: 12px 20px;
-            border: none;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 1em;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .btn-start {
-            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-            color: white;
-        }
-        .btn-start:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 16px rgba(16, 185, 129, 0.3); }
-        .btn-start:disabled { opacity: 0.5; cursor: not-allowed; }
-        .btn-stop {
-            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-            color: white;
-        }
-        .btn-stop:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 16px rgba(239, 68, 68, 0.3); }
-        .btn-stop:disabled { opacity: 0.5; cursor: not-allowed; }
-        .command-group { display: flex; gap: 12px; margin-bottom: 20px; }
-        input[type="text"] {
-            flex: 1;
-            background: rgba(15, 23, 42, 0.6);
-            border: 1px solid rgba(148, 163, 184, 0.2);
-            border-radius: 8px;
-            padding: 10px 14px;
-            color: white;
-            font-family: 'Monaco', monospace;
-        }
-        input[type="text"]:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); }
-        .btn-send {
-            background: #3b82f6;
-            color: white;
-            padding: 10px 20px;
-        }
-        .btn-send:hover:not(:disabled) { background: #2563eb; }
-        .btn-send:disabled { opacity: 0.5; cursor: not-allowed; }
-        .log-box {
-            background: rgba(15, 23, 42, 0.6);
-            border: 1px solid rgba(148, 163, 184, 0.2);
-            border-radius: 8px;
-            padding: 14px;
-            height: 300px;
-            overflow-y: auto;
-            font-family: 'Monaco', monospace;
-            font-size: 0.875em;
-        }
-        .log-entry { margin: 4px 0; line-height: 1.4; }
-        .log-error { color: #f87171; }
-        .log-success { color: #86efac; }
-        .log-command { color: #60a5fa; }
-        .log-info { color: #cbd5e1; }
-        .status-badge {
-            display: inline-block;
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            margin-right: 8px;
-        }
-        .status-online { background: #10b981; box-shadow: 0 0 8px #10b981; }
-        .status-offline { background: #6b7280; }
-        @media (max-width: 768px) { .main-grid { grid-template-columns: 1fr; } }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #fff; min-height: 100vh; }
+        .wrapper { display: grid; grid-template-columns: 250px 1fr; min-height: 100vh; }
+        .sidebar { background: #16213e; border-right: 1px solid #0f3460; padding: 20px; overflow-y: auto; }
+        .sidebar h3 { color: #0f9dff; font-size: 0.85em; margin-top: 25px; margin-bottom: 15px; text-transform: uppercase; font-weight: 700; letter-spacing: 1px; }
+        .sidebar h3:first-child { margin-top: 0; }
+        .sidebar a { display: flex; align-items: center; gap: 12px; padding: 12px 15px; color: #aaa; text-decoration: none; border-radius: 6px; transition: all 0.2s; cursor: pointer; }
+        .sidebar a:hover { background: #0f3460; color: #0f9dff; }
+        .sidebar a.active { background: #0f9dff; color: #000; }
+        .main { overflow-y: auto; padding: 30px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        .header h1 { font-size: 2em; }
+        .header-icons { display: flex; gap: 15px; }
+        .header-icons button { background: none; border: none; color: #aaa; font-size: 1.3em; cursor: pointer; }
+        .content-panel { background: #16213e; border: 1px solid #0f3460; border-radius: 8px; padding: 30px; margin-bottom: 20px; }
+        .panel-title { font-size: 1.3em; margin-bottom: 20px; }
+        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .stat-card { background: #0f3460; padding: 15px; border-radius: 8px; border-left: 4px solid #0f9dff; }
+        .stat-label { color: #aaa; font-size: 0.9em; margin-bottom: 5px; }
+        .stat-value { font-size: 1.8em; font-weight: bold; color: #0f9dff; }
+        .control-section { margin-top: 20px; }
+        .control-label { color: #aaa; font-size: 0.85em; margin-bottom: 10px; font-weight: 600; }
+        input[type="range"] { width: 100%; margin-bottom: 10px; }
+        input[type="text"], input[type="number"] { background: #0f3460; border: 1px solid #0f9dff; color: #fff; padding: 10px 15px; border-radius: 6px; width: 100%; margin-bottom: 10px; font-family: inherit; }
+        input[type="text"]:focus, input[type="number"]:focus { outline: none; border-color: #00d4ff; box-shadow: 0 0 10px rgba(15, 157, 255, 0.3); }
+        .button-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
+        button { padding: 12px 20px; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; transition: all 0.2s; font-size: 0.95em; }
+        .btn-primary { background: #0f9dff; color: #000; }
+        .btn-primary:hover:not(:disabled) { background: #00d4ff; }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-success { background: #00b368; color: #fff; }
+        .btn-success:hover:not(:disabled) { background: #00d485; }
+        .btn-danger { background: #ff4444; color: #fff; }
+        .btn-danger:hover:not(:disabled) { background: #ff6666; }
+        .server-list { display: grid; gap: 10px; }
+        .server-card { background: #0f3460; padding: 15px; border-radius: 6px; border-left: 4px solid #00b368; }
+        .server-card.offline { border-left-color: #666; }
+        .server-name { font-weight: 600; margin-bottom: 5px; }
+        .server-info { color: #aaa; font-size: 0.9em; margin-bottom: 10px; }
+        .server-status { display: flex; align-items: center; gap: 8px; font-size: 0.9em; }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #00b368; }
+        .server-card.offline .status-dot { background: #666; }
+        .console-input { display: flex; gap: 10px; margin-top: 10px; }
+        .console-input input { flex: 1; }
+        .console-input button { flex: 0.3; }
+        .log { background: #0f3460; padding: 15px; border-radius: 6px; height: 300px; overflow-y: auto; font-family: monospace; font-size: 0.85em; }
+        .log-line { margin-bottom: 3px; }
+        .log-success { color: #00d485; }
+        .log-error { color: #ff6666; }
+        .log-info { color: #aaa; }
+        .log-cmd { color: #0f9dff; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>Server Manager</h1>
-            <p>Spigot Server Control Panel</p>
+    <div class="wrapper">
+        <div class="sidebar">
+            <h3>Server Management</h3>
+            <a class="nav-item active" data-tab="console">→ Console</a>
+            <a class="nav-item" data-tab="servers">📦 Servers</a>
+            <a class="nav-item" data-tab="create">➕ Create Server</a>
+            <a class="nav-item" data-tab="commands">⚡ Quick Commands</a>
+            
+            <h3>Settings</h3>
+            <a class="nav-item" data-tab="system">⚙️ System</a>
+            <a class="nav-item" data-tab="logs">📊 Logs</a>
         </div>
-        <div class="grid">
-            <div class="stat-box">
-                <div class="stat-label">STATUS</div>
-                <div class="stat-value"><span class="status-badge" id="statusBadge"></span><span id="statusText">OFFLINE</span></div>
+
+        <div class="main">
+            <div class="header">
+                <h1>Server Manager</h1>
+                <div class="header-icons">
+                    <button>⚙️</button>
+                    <button>🔔</button>
+                    <button>→</button>
+                </div>
             </div>
-            <div class="stat-box">
-                <div class="stat-label">ALLOCATED RAM</div>
-                <div class="stat-value" id="allocatedRam">0 MB</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-label">SYSTEM RAM</div>
-                <div class="stat-value" id="systemRam">-</div>
-                <div class="stat-sub">Available</div>
-            </div>
-        </div>
-        <div class="main-grid">
-            <div>
-                <div class="panel">
-                    <h2>RAM Allocation</h2>
-                    <div class="slider-group">
-                        <label class="slider-label">Select RAM Amount</label>
-                        <input type="range" id="ramSlider" min="512" max="8192" step="256" value="2048" disabled>
-                        <div style="margin-top: 12px; color: #94a3b8; font-size: 0.875em;">
-                            <span id="ramValue">2048</span> MB / <span id="ramMax">8192</span> MB
+
+            <!-- Console Tab -->
+            <div id="console-tab" class="tab-content">
+                <div class="content-panel">
+                    <div class="panel-title">Console</div>
+                    
+                    <div class="stat-grid">
+                        <div class="stat-card">
+                            <div class="stat-label">Status</div>
+                            <div class="stat-value"><span id="statusDot" class="status-dot"></span><span id="statusText">OFFLINE</span></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Allocated RAM</div>
+                            <div class="stat-value" id="allocRam">0 MB</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">System RAM</div>
+                            <div class="stat-value" id="sysRam">0 GB</div>
                         </div>
                     </div>
-                </div>
-                <div class="panel" style="margin-top: 20px;">
-                    <h2>Server Control</h2>
-                    <div class="button-group">
-                        <button class="btn-start" id="startBtn" onclick="startServer()">START</button>
-                        <button class="btn-stop" id="stopBtn" onclick="stopServer()">STOP</button>
+
+                    <div class="control-section">
+                        <div class="control-label">RAM ALLOCATION</div>
+                        <input type="range" id="ramSlider" min="512" max="8192" step="256" value="2048" disabled>
+                        <div style="color: #aaa; font-size: 0.9em;"><span id="ramValue">2048</span> MB</div>
                     </div>
-                </div>
-                <div class="panel" style="margin-top: 20px;">
-                    <h2>Console</h2>
-                    <div class="command-group">
-                        <input type="text" id="commandInput" placeholder="say Hello" onkeypress="if(event.key==='Enter') sendCommand()">
-                        <button class="btn-send" onclick="sendCommand()">SEND</button>
+
+                    <div class="button-row" style="margin-top: 30px;">
+                        <button class="btn-success" id="startBtn" onclick="startServer()">START SERVER</button>
+                        <button class="btn-danger" id="stopBtn" onclick="stopServer()" disabled>STOP SERVER</button>
+                    </div>
+
+                    <div style="margin-top: 30px;">
+                        <div class="control-label">COMMAND INPUT</div>
+                        <div class="console-input">
+                            <input type="text" id="cmdInput" placeholder="Enter command...">
+                            <button class="btn-primary" onclick="sendCmd()">SEND</button>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 30px;">
+                        <div class="control-label">ACTIVITY LOG</div>
+                        <div class="log" id="logBox"></div>
                     </div>
                 </div>
             </div>
-            <div class="panel">
-                <h2>Activity Log</h2>
-                <div class="log-box" id="logBox"></div>
+
+            <!-- Servers Tab -->
+            <div id="servers-tab" class="tab-content" style="display: none;">
+                <div class="content-panel">
+                    <div class="panel-title">Active Servers</div>
+                    <div class="server-list" id="serverList">
+                        <div style="color: #aaa;">No servers running</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Create Server Tab -->
+            <div id="create-tab" class="tab-content" style="display: none;">
+                <div class="content-panel">
+                    <div class="panel-title">Create New Server</div>
+                    
+                    <div class="control-section">
+                        <div class="control-label">SERVER NAME</div>
+                        <input type="text" id="serverName" placeholder="e.g., Cammc">
+                    </div>
+
+                    <div class="control-section">
+                        <div class="control-label">RAM ALLOCATION</div>
+                        <input type="range" id="newRamSlider" min="512" max="8192" step="256" value="2048">
+                        <div style="color: #aaa; font-size: 0.9em;"><span id="newRamValue">2048</span> MB</div>
+                    </div>
+
+                    <button class="btn-primary" onclick="createServer()" style="width: 100%; margin-top: 20px; padding: 15px;">CREATE SERVER</button>
+                </div>
+            </div>
+
+            <!-- Quick Commands Tab -->
+            <div id="commands-tab" class="tab-content" style="display: none;">
+                <div class="content-panel">
+                    <div class="panel-title">Quick Commands</div>
+                    <div id="cmdGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px;"></div>
+                </div>
             </div>
         </div>
     </div>
+
     <script>
+        const COMMANDS = {
+            "Player": [
+                {name: "List", cmd: "list"},
+                {name: "OP @p", cmd: "op @p"},
+                {name: "Gamemode Creative", cmd: "gamemode creative @p"},
+                {name: "Gamemode Survival", cmd: "gamemode survival @p"},
+                {name: "Teleport Spawn", cmd: "tp @p 0 100 0"},
+                {name: "Heal", cmd: "effect give @p instant_health"},
+            ],
+            "World": [
+                {name: "Day", cmd: "time set day"},
+                {name: "Night", cmd: "time set night"},
+                {name: "Clear Weather", cmd: "weather clear"},
+                {name: "Rain", cmd: "weather rain"},
+                {name: "Save All", cmd: "save-all"},
+            ],
+            "Server": [
+                {name: "Announce", cmd: "say Server Message"},
+                {name: "Difficulty Hard", cmd: "difficulty 3"},
+                {name: "Difficulty Easy", cmd: "difficulty 1"},
+            ]
+        };
+
         let logs = [];
-        function updateStatus() {
-            fetch('/api/server-status').then(r => r.json()).then(data => {
-                const badge = document.getElementById('statusBadge');
-                const statusText = document.getElementById('statusText');
-                const startBtn = document.getElementById('startBtn');
-                const stopBtn = document.getElementById('stopBtn');
-                const ramSlider = document.getElementById('ramSlider');
-                if (data.running) {
-                    badge.className = 'status-badge status-online';
-                    statusText.textContent = 'ONLINE';
-                    startBtn.disabled = true;
-                    stopBtn.disabled = false;
-                    ramSlider.disabled = true;
-                } else {
-                    badge.className = 'status-badge status-offline';
-                    statusText.textContent = 'OFFLINE';
-                    startBtn.disabled = false;
-                    stopBtn.disabled = true;
-                    ramSlider.disabled = false;
-                }
-                document.getElementById('allocatedRam').textContent = data.allocated_ram + ' MB';
+
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.addEventListener('click', () => {
+                document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
+                item.classList.add('active');
+                const tab = item.dataset.tab + '-tab';
+                document.getElementById(tab).style.display = 'block';
             });
-        }
-        function getSystemInfo() {
-            fetch('/api/system-info').then(r => r.json()).then(data => {
-                document.getElementById('systemRam').textContent = data.total_ram_gb + ' GB';
-                document.getElementById('ramMax').textContent = data.total_ram_mb;
-                document.getElementById('ramSlider').max = Math.floor(data.total_ram_mb * 0.75);
-            });
-        }
-        function startServer() {
-            const ram = document.getElementById('ramSlider').value;
-            addLog('Starting server with ' + ram + ' MB...', 'info');
-            fetch('/api/start', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ram: parseInt(ram)})})
-            .then(r => r.json()).then(data => {
-                addLog(data.message, data.status === 'success' ? 'success' : 'error');
-                setTimeout(updateStatus, 1000);
-            });
-        }
-        function stopServer() {
-            addLog('Stopping server...', 'info');
-            fetch('/api/stop', {method: 'POST'}).then(r => r.json()).then(data => {
-                addLog(data.message, data.status === 'success' ? 'success' : 'error');
-                setTimeout(updateStatus, 1000);
-            });
-        }
-        function sendCommand() {
-            const input = document.getElementById('commandInput');
-            const cmd = input.value.trim();
-            if (!cmd) return;
-            addLog('> ' + cmd, 'command');
-            fetch('/api/command', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({command: cmd})})
-            .then(r => r.json()).then(data => {
-                addLog(data.message, data.status === 'success' ? 'success' : 'error');
-            });
-            input.value = '';
-        }
-        function addLog(msg, type = 'log') {
+        });
+
+        function addLog(msg, type = 'info') {
             logs.push({msg, type});
             if (logs.length > 100) logs.shift();
-            const logBox = document.getElementById('logBox');
-            logBox.innerHTML = logs.map(l => '<div class="log-entry log-' + l.type + '">' + l.msg + '</div>').join('');
-            logBox.scrollTop = logBox.scrollHeight;
+            document.getElementById('logBox').innerHTML = logs.map(l => `<div class="log-line log-${l.type}">${l.msg}</div>`).join('');
+            document.getElementById('logBox').scrollTop = 999999;
         }
-        document.getElementById('ramSlider').addEventListener('input', (e) => {
+
+        function updateStatus() {
+            fetch('/api/server-status').then(r => r.json()).then(d => {
+                const online = d.running;
+                document.getElementById('statusDot').style.background = online ? '#00b368' : '#666';
+                document.getElementById('statusText').textContent = online ? 'ONLINE' : 'OFFLINE';
+                document.getElementById('allocRam').textContent = d.allocated_ram + ' MB';
+                document.getElementById('startBtn').disabled = online;
+                document.getElementById('stopBtn').disabled = !online;
+                document.getElementById('ramSlider').disabled = online;
+            });
+        }
+
+        function getSystemInfo() {
+            fetch('/api/system-info').then(r => r.json()).then(d => {
+                document.getElementById('sysRam').textContent = d.total_ram_gb + ' GB';
+                document.getElementById('ramSlider').max = Math.floor(d.total_ram_mb * 0.75);
+                document.getElementById('newRamSlider').max = Math.floor(d.total_ram_mb * 0.75);
+            });
+        }
+
+        function startServer() {
+            const ram = document.getElementById('ramSlider').value;
+            addLog(`Starting with ${ram}MB...`, 'info');
+            fetch('/api/start', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ram: parseInt(ram)})})
+                .then(r => r.json()).then(d => {
+                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
+                    setTimeout(updateStatus, 1000);
+                });
+        }
+
+        function stopServer() {
+            addLog('Stopping...', 'info');
+            fetch('/api/stop', {method: 'POST'}).then(r => r.json()).then(d => {
+                addLog(d.message, d.status === 'success' ? 'success' : 'error');
+                setTimeout(updateStatus, 1000);
+            });
+        }
+
+        function sendCmd() {
+            const cmd = document.getElementById('cmdInput').value.trim();
+            if (!cmd) return;
+            addLog(`> ${cmd}`, 'cmd');
+            fetch('/api/command', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({command: cmd})})
+                .then(r => r.json()).then(d => {
+                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
+                });
+            document.getElementById('cmdInput').value = '';
+        }
+
+        function createServer() {
+            const name = document.getElementById('serverName').value.trim();
+            const ram = document.getElementById('newRamSlider').value;
+            if (!name) {
+                addLog('Server name required', 'error');
+                return;
+            }
+            addLog(`Creating '${name}'...`, 'info');
+            fetch('/api/build-server', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({server_name: name, ram: parseInt(ram)})})
+                .then(r => r.json()).then(d => {
+                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
+                    document.getElementById('serverName').value = '';
+                    loadServers();
+                });
+        }
+
+        function loadServers() {
+            fetch('/api/servers').then(r => r.json()).then(d => {
+                const html = d.servers.map(s => `
+                    <div class="server-card ${!s.running ? 'offline' : ''}">
+                        <div class="server-name">${s.name}</div>
+                        <div class="server-info">RAM: ${s.ram}MB | Port: ${s.port}</div>
+                        <div class="server-status">
+                            <span class="status-dot"></span>
+                            <span>${s.running ? 'ONLINE' : 'OFFLINE'}</span>
+                        </div>
+                        <button class="btn-primary" onclick="startNamed('${s.name}', ${s.ram})" style="width: 100%; margin-top: 10px;" ${s.running ? 'disabled' : ''}>START</button>
+                    </div>
+                `).join('');
+                document.getElementById('serverList').innerHTML = html || '<div style="color: #aaa;">No servers</div>';
+            });
+        }
+
+        function startNamed(name, ram) {
+            addLog(`Starting '${name}'...`, 'info');
+            fetch('/api/start-named', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({server_name: name, ram: parseInt(ram)})})
+                .then(r => r.json()).then(d => {
+                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
+                    setTimeout(loadServers, 1000);
+                });
+        }
+
+        function initCmds() {
+            const grid = document.getElementById('cmdGrid');
+            let html = '';
+            for (const [cat, cmds] of Object.entries(COMMANDS)) {
+                html += `<div style="grid-column: 1/-1; color: #0f9dff; font-weight: 600; margin-top: 10px;">${cat}</div>`;
+                cmds.forEach(c => {
+                    html += `<button class="btn-primary" onclick="sendCommand('${c.cmd}')" style="padding: 10px 15px; font-size: 0.85em;">${c.name}</button>`;
+                });
+            }
+            grid.innerHTML = html;
+        }
+
+        function sendCommand(cmd) {
+            document.getElementById('cmdInput').value = cmd;
+            sendCmd();
+        }
+
+        document.getElementById('ramSlider').addEventListener('input', e => {
             document.getElementById('ramValue').textContent = e.target.value;
         });
+        document.getElementById('newRamSlider').addEventListener('input', e => {
+            document.getElementById('newRamValue').textContent = e.target.value;
+        });
+
         getSystemInfo();
         updateStatus();
+        loadServers();
+        initCmds();
         setInterval(updateStatus, 2000);
-        addLog('Server manager ready', 'success');
+        setInterval(loadServers, 5000);
+        addLog('Ready', 'success');
     </script>
 </body>
 </html>"""
