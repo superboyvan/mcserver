@@ -1,4 +1,218 @@
-#!/usr/bin/env python3
+function manageServer(name) {
+            activeServer = name;
+            document.querySelector('[data-tab="console"]').click();
+            addLog(`Now managing: ${name}`, 'info');
+        }
+
+        function loadServerOptions() {
+            fetch('/api/servers').then(r => r.json()).then(d => {
+                const select = document.getElementById('fileServerSelect');
+                select.innerHTML = '<option value="">Choose a server...</option>';
+                d.servers.forEach(s => {
+                    const opt = document.createElement('option');
+                    opt.value = s.name;
+                    opt.textContent = s.name;
+                    select.appendChild(opt);
+                });
+            });
+        }
+
+        function loadServerFiles() {
+            const server = document.getElementById('fileServerSelect').value;
+            if (!server) {
+                document.getElementById('fileManager').style.display = 'none';
+                return;
+            }
+            document.getElementById('fileManager').style.display = 'block';
+            
+            fetch(`/api/server-files/${server}`)
+                .then(r => r.json()).then(d => {
+                    if (d.files) {
+                        const html = d.files.map(f => `
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: rgba(15, 157, 255, 0.1); margin-bottom: 8px; border-radius: 4px;">
+                                <div>
+                                    <div style="color: #60a5fa; font-weight: 600;">${f.isDir ? '📁' : '📄'} ${f.name}</div>
+                                    <div style="color: #aaa; font-size: 0.8em;">${f.isDir ? 'Folder' : (f.size / 1024).toFixed(2) + ' KB'}</div>
+                                </div>
+                                ${!f.isDir ? `<button class="btn-danger" onclick="deleteFile('${server}', '${f.name}')" style="padding: 8px 12px; font-size: 0.85em;">DELETE</button>` : ''}
+                            </div>
+                        `).join('');
+                        document.getElementById('fileList').innerHTML = html || '<div style="color: #aaa;">Empty</div>';
+                    }
+                });
+        }
+
+        function uploadFiles() {
+            const server = document.getElementById('fileServerSelect').value;
+            const files = document.getElementById('fileInput').files;
+            
+            if (!server) {
+                addLog('Select a server first', 'error');
+                return;
+            }
+            if (files.length === 0) {
+                addLog('Select files to upload', 'error');
+                return;
+            }
+            
+            const formData = new FormData();
+            for (let file of files) {
+                formData.append('files', file);
+            }
+            
+            addLog(`Uploading ${files.length} file(s) to ${server}...`, 'info');
+            fetch(`/api/upload/${server}`, {method: 'POST', body: formData})
+                .then(r => r.json()).then(d => {
+                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
+                    document.getElementById('fileInput').value = '';
+                    loadServerFiles();
+                });
+        }
+
+        function deleteFile(server, filename) {
+            if (!confirm(`Delete ${filename}?`)) return;
+            addLog(`Deleting ${filename}...`, 'info');
+            fetch(`/api/delete-file/${server}/${filename}`, {method: 'DELETE'})
+                .then(r => r.json()).then(d => {
+                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
+                    loadServerFiles();
+                });
+        }
+
+        function initCmds() {@app.route('/api/stop-named/<server_name>', methods=['POST'])
+def api_stop_named(server_name):
+    if server_name not in servers:
+        return jsonify({"status": "error", "message": f"Server '{server_name}' not found"})
+    
+    server_info = servers[server_name]
+    if not server_info['running'] or not server_info['process']:
+        return jsonify({"status": "error", "message": f"Server '{server_name}' not running"})
+    
+    try:
+        server_info['process'].stdin.write("stop\n")
+        server_info['process'].stdin.flush()
+        server_info['process'].wait(timeout=30)
+        server_info['running'] = False
+        return jsonify({"status": "success", "message": f"Server '{server_name}' stopped"})
+    except subprocess.TimeoutExpired:
+        server_info['process'].kill()
+        server_info['running'] = False
+        return jsonify({"status": "success", "message": f"Server '{server_name}' force stopped"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/server-files/<server_name>', methods=['GET'])
+def api_server_files(server_name):
+    """List files in server directory"""
+    if server_name not in servers:
+        return jsonify({"status": "error", "message": "Server not found"}), 404
+    
+    server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
+    if not os.path.exists(server_dir):
+        return jsonify({"status": "error", "message": "Server directory not found"}), 404
+    
+    try:
+        files = []
+        for item in os.listdir(server_dir):
+            path = os.path.join(server_dir, item)
+            is_dir = os.path.isdir(path)
+            size = 0 if is_dir else os.path.getsize(path)
+            files.append({
+                'name': item,
+                'isDir': is_dir,
+                'size': size
+            })
+        return jsonify({"files": sorted(files, key=lambda x: (not x['isDir'], x['name']))})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/upload/<server_name>', methods=['POST'])
+def api_upload(server_name):
+    """Upload files to server"""
+    if server_name not in servers:
+        return jsonify({"status": "error", "message": "Server not found"}), 404
+    
+    server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
+    if not os.path.exists(server_dir):
+        return jsonify({"status": "error", "message": "Server directory not found"}), 404
+    
+    try:
+        uploaded = []
+        for file in request.files.getlist('files'):
+            if file.filename:
+                filename = os.path.basename(file.filename)
+                filepath = os.path.join(server_dir, filename)
+                file.save(filepath)
+                uploaded.append(filename)
+        
+        return jsonify({"status": "success", "message": f"Uploaded {len(uploaded)} file(s)", "files": uploaded})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/delete-file/<server_name>/<filename>', methods=['DELETE'])
+def api_delete_file(server_name, filename):
+    """Delete a file from server"""
+    if server_name not in servers:
+        return jsonify({"status": "error", "message": "Server not found"}), 404
+    
+    server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
+    filepath = os.path.join(server_dir, filename)
+    
+    # Security check - make sure path is within server dir
+    if not os.path.abspath(filepath).startswith(os.path.abspath(server_dir)):
+        return jsonify({"status": "error", "message": "Invalid path"}), 403
+    
+    try:
+        if os.path.isfile(filepath):
+            os.remove(filepath)
+            return jsonify({"status": "success", "message": f"Deleted {filename}"})
+        else:
+            return jsonify({"status": "error", "message": "File not found"}), 404
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=80, debug=False)@app.route('/api/start-named', methods=['POST'])
+def api_start_named():
+    data = request.json
+    server_name = data.get('server_name')
+    ram = data.get('ram', 2048)
+    result = start_named_server(server_name, ram)
+    return jsonify(result)
+
+@app.route('/api/stop-named/<server_name>', methods=['POST'])
+def api_stop_named(server_name):
+    if server_name not in servers:
+        return jsonify({"status": "error", "message": f"Server '{server_name}' not found"})
+    
+    server_info = servers[server_name]
+    if not server_info['running'] or not server_info['process']:
+        return jsonify({"status": "error", "message": f"Server '{server_name}' not running"})
+    
+    try:
+        server_info['process'].stdin.write("stop\n")
+        server_info['process'].stdin.flush()
+        server_info['process'].wait(timeout=30)
+        server_info['running'] = False
+        return jsonify({"status": "success", "message": f"Server '{server_name}' stopped"})
+    except subprocess.TimeoutExpired:
+        server_info['process'].kill()
+        server_info['running'] = False
+        return jsonify({"status": "success", "message": f"Server '{server_name}' force stopped"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})@app.route('/api/command', methods=['POST'])
+def api_command():
+    data = request.json
+    cmd = data.get('command', '')
+    return jsonify(run_command(cmd))
+
+@app.route('/api/command-named/<server_name>', methods=['POST'])
+def api_command_named(server_name):
+    data = request.json
+    cmd = data.get('command', '')
+    return jsonify(run_command_on_server(server_name, cmd))
+
+@app.route('/api/build-server', methods=['POST'])#!/usr/bin/env python3
 from flask import Flask, render_template_string, request, jsonify
 from flask_cors import CORS
 import psutil
@@ -113,6 +327,22 @@ def run_command(cmd):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+def run_command_on_server(server_name, cmd):
+    """Run command on a specific named server"""
+    if server_name not in servers:
+        return {"status": "error", "message": f"Server '{server_name}' not found"}
+    
+    server_info = servers[server_name]
+    if not server_info['running'] or not server_info['process']:
+        return {"status": "error", "message": f"Server '{server_name}' not running"}
+    
+    try:
+        server_info['process'].stdin.write(cmd + "\n")
+        server_info['process'].stdin.flush()
+        return {"status": "success", "message": f"Command executed: {cmd}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 def add_to_hosts(server_name):
     """Add server name to /etc/hosts"""
     try:
@@ -217,8 +447,6 @@ def api_command():
     data = request.json
     cmd = data.get('command', '')
     return jsonify(run_command(cmd))
-
-@app.route('/api/build-server', methods=['POST'])
 def api_build_server():
     data = request.json
     server_name = data.get('server_name', 'Server')
@@ -364,6 +592,7 @@ HTML = """<!DOCTYPE html>
             
             <h3>Settings</h3>
             <a class="nav-item" data-tab="system">⚙️ System</a>
+            <a class="nav-item" data-tab="files">📁 File Manager</a>
             <a class="nav-item" data-tab="logs">📊 Logs</a>
         </div>
 
@@ -551,6 +780,35 @@ HTML = """<!DOCTYPE html>
                     <div id="cmdGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px;"></div>
                 </div>
             </div>
+
+            <!-- File Manager Tab -->
+            <div id="files-tab" class="tab-content" style="display: none;">
+                <div class="content-panel">
+                    <div class="panel-title">File Manager</div>
+                    
+                    <div class="control-section">
+                        <div class="control-label">SELECT SERVER</div>
+                        <select id="fileServerSelect" style="background: #0f3460; border: 1px solid #0f9dff; color: #fff; padding: 10px 15px; border-radius: 6px; width: 100%; margin-bottom: 10px; font-family: inherit;" onchange="loadServerFiles()">
+                            <option value="">Choose a server...</option>
+                        </select>
+                    </div>
+
+                    <div id="fileManager" style="display: none;">
+                        <div class="control-section">
+                            <div class="control-label">UPLOAD FILES</div>
+                            <input type="file" id="fileInput" multiple style="margin-bottom: 10px; color: #aaa;">
+                            <button class="btn-primary" onclick="uploadFiles()" style="width: 100%;">UPLOAD</button>
+                        </div>
+
+                        <div class="control-section" style="margin-top: 20px;">
+                            <div class="control-label">SERVER FILES</div>
+                            <div style="background: #0f3460; border: 1px solid #0f9dff; border-radius: 6px; padding: 15px; max-height: 400px; overflow-y: auto;">
+                                <div id="fileList" style="color: #aaa;">Loading files...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -579,6 +837,7 @@ HTML = """<!DOCTYPE html>
         };
 
         let logs = [];
+        let activeServer = null;  // Track which named server is running
 
         document.querySelectorAll('.nav-item').forEach(item => {
             item.addEventListener('click', () => {
@@ -639,7 +898,13 @@ HTML = """<!DOCTYPE html>
             const cmd = document.getElementById('cmdInput').value.trim();
             if (!cmd) return;
             addLog(`> ${cmd}`, 'cmd');
-            fetch('/api/command', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({command: cmd})})
+            
+            let url = '/api/command';
+            if (activeServer) {
+                url = `/api/command-named/${activeServer}`;
+            }
+            
+            fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({command: cmd})})
                 .then(r => r.json()).then(d => {
                     addLog(d.message, d.status === 'success' ? 'success' : 'error');
                 });
@@ -674,6 +939,8 @@ HTML = """<!DOCTYPE html>
                             <span>${s.building ? 'BUILDING' : s.running ? 'ONLINE' : 'OFFLINE'}</span>
                         </div>
                         <button class="btn-primary" onclick="startNamed('${s.name}', ${s.ram})" style="width: 100%; margin-top: 10px;" ${s.running || s.building ? 'disabled' : ''}>START</button>
+                        <button class="btn-danger" onclick="stopNamed('${s.name}')" style="width: 100%; margin-top: 5px;" ${!s.running ? 'disabled' : ''}>STOP</button>
+                        <button class="btn-primary" onclick="manageServer('${s.name}')" style="width: 100%; margin-top: 5px;">MANAGE</button>
                     </div>
                 `).join('');
                 document.getElementById('serverList').innerHTML = html || '<div style="color: #aaa;">No servers</div>';
@@ -682,6 +949,7 @@ HTML = """<!DOCTYPE html>
 
         function startNamed(name, ram) {
             addLog(`Starting '${name}'...`, 'info');
+            activeServer = name;
             fetch('/api/start-named', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({server_name: name, ram: parseInt(ram)})})
                 .then(r => r.json()).then(d => {
                     addLog(d.message, d.status === 'success' ? 'success' : 'error');
@@ -689,7 +957,21 @@ HTML = """<!DOCTYPE html>
                 });
         }
 
-        function initCmds() {
+        function stopNamed(name) {
+            addLog(`Stopping '${name}'...`, 'info');
+            fetch(`/api/stop-named/${name}`, {method: 'POST'})
+                .then(r => r.json()).then(d => {
+                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
+                    if (activeServer === name) activeServer = null;
+                    setTimeout(loadServers, 1000);
+                });
+        }
+
+        function manageServer(name) {
+            activeServer = name;
+            document.querySelector('[data-tab="console"]').click();
+            addLog(`Now managing: ${name}`, 'info');
+        }
             const grid = document.getElementById('cmdGrid');
             let html = '';
             for (const [cat, cmds] of Object.entries(COMMANDS)) {
@@ -716,9 +998,11 @@ HTML = """<!DOCTYPE html>
         getSystemInfo();
         updateStatus();
         loadServers();
+        loadServerOptions();
         initCmds();
         setInterval(updateStatus, 2000);
         setInterval(loadServers, 5000);
+        setInterval(loadServerOptions, 10000);
         addLog('Ready', 'success');
     </script>
 </body>
