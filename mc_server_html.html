@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Minecraft Server Manager</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #fff; min-height: 100vh; }
+        .wrapper { display: grid; grid-template-columns: 250px 1fr; min-height: 100vh; }
+        .sidebar { background: #16213e; border-right: 1px solid #0f3460; padding: 20px; overflow-y: auto; }
+        .sidebar h3 { color: #0f9dff; font-size: 0.85em; margin-top: 25px; margin-bottom: 15px; text-transform: uppercase; font-weight: 700; letter-spacing: 1px; }
+        .sidebar h3:first-child { margin-top: 0; }
+        .sidebar a { display: flex; align-items: center; gap: 12px; padding: 12px 15px; color: #aaa; text-decoration: none; border-radius: 6px; transition: all 0.2s; cursor: pointer; }
+        .sidebar a:hover { background: #0f3460; color: #0f9dff; }
+        .sidebar a.active { background: #0f9dff; color: #000; }
+        .main { overflow-y: auto; padding: 30px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        .header h1 { font-size: 2em; }
+        .content-panel { background: #16213e; border: 1px solid #0f3460; border-radius: 8px; padding: 30px; margin-bottom: 20px; }
+        .panel-title { font-size: 1.3em; margin-bottom: 20px; }
+        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .stat-card { background: #0f3460; padding: 15px; border-radius: 8px; border-left: 4px solid #0f9dff; }
+        .stat-label { color: #aaa; font-size: 0.9em; margin-bottom: 5px; }
+        .stat-value { font-size: 1.8em; font-weight: bold; color: #0f9dff; }
+        .control-section { margin-top: 20px; }
+        .control-label { color: #aaa; font-size: 0.85em; margin-bottom: 10px; font-weight: 600; }
+        input[type="range"] { width: 100%; margin-bottom: 10px; height: 6px; border-radius: 3px; background: #0f3460; outline: none; }
+        input[type="range"]::-webkit-slider-thumb { appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #0f9dff; cursor: pointer; }
+        input[type="text"], input[type="number"], input[type="file"], select { background: #0f3460; border: 1px solid #0f9dff; color: #fff; padding: 10px 15px; border-radius: 6px; width: 100%; margin-bottom: 10px; font-family: inherit; }
+        input:focus, select:focus { outline: none; border-color: #00d4ff; box-shadow: 0 0 10px rgba(15, 157, 255, 0.3); }
+        .button-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
+        button { padding: 12px 20px; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; transition: all 0.2s; font-size: 0.95em; }
+        .btn-primary { background: #0f9dff; color: #000; }
+        .btn-primary:hover:not(:disabled) { background: #00d4ff; transform: translateY(-1px); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-success { background: #00b368; color: #fff; }
+        .btn-success:hover:not(:disabled) { background: #00d485; transform: translateY(-1px); }
+        .btn-danger { background: #ff4444; color: #fff; }
+        .btn-danger:hover:not(:disabled) { background: #ff6666; transform: translateY(-1px); }
+        .server-list { display: grid; gap: 10px; }
+        .server-card { background: #0f3460; padding: 15px; border-radius: 6px; border-left: 4px solid #00b368; }
+        .server-card.offline { border-left-color: #666; }
+        .server-name { font-weight: 600; margin-bottom: 5px; font-size: 1.1em; }
+        .server-info { color: #aaa; font-size: 0.9em; margin-bottom: 10px; }
+        .server-status { display: flex; align-items: center; gap: 8px; font-size: 0.9em; margin-bottom: 10px; }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #00b368; }
+        .server-card.offline .status-dot { background: #666; }
+        .console-input { display: flex; gap: 10px; margin-top: 10px; }
+        .console-input input { flex: 1; }
+        .console-input button { flex: 0 0 100px; }
+        .log { background: #0f3460; padding: 15px; border-radius: 6px; height: 300px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 0.85em; line-height: 1.5; }
+        .log-line { margin-bottom: 3px; }
+        .log-success { color: #00d485; }
+        .log-error { color: #ff6666; }
+        .log-info { color: #aaa; }
+        .log-cmd { color: #0f9dff; font-weight: bold; }
+        .tab-content { display: none; }
+        .tab-content:first-of-type { display: block; }
+        .world-upload-box { background: #0f3460; border: 2px dashed #0f9dff; border-radius: 8px; padding: 20px; text-align: center; margin: 10px 0; }
+        .world-upload-box.has-file { border-color: #00b368; background: rgba(0, 179, 104, 0.1); }
+        .cmd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+        .cmd-btn { background: #0f3460; border: 1px solid #0f9dff; color: #0f9dff; padding: 12px; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+        .cmd-btn:hover { background: #0f9dff; color: #000; }
+        .progress-bar { width: 100%; height: 8px; background: #0f3460; border-radius: 4px; overflow: hidden; margin: 10px 0; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #0f9dff, #00d4ff); transition: width 0.3s; }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <div class="sidebar">
+            <h3>🎮 Server Management</h3>
+            <a class="nav-item active" data-tab="console">→ Console</a>
+            <a class="nav-item" data-tab="servers">📦 Servers</a>
+            <a class="nav-item" data-tab="create">➕ Create Server</a>
+            <a class="nav-item" data-tab="commands">⚡ Quick Commands</a>
+            
+            <h3>⚙️ Settings</h3>
+            <a class="nav-item" data-tab="system">💻 System Info</a>
+            <a class="nav-item" data-tab="files">📁 File Manager</a>
+        </div>
+
+        <div class="main">
+            <div class="header">
+                <h1>🎮 Minecraft Server Manager</h1>
+            </div>
+
+            <!-- CONSOLE TAB -->
+            <div id="console-tab" class="tab-content" style="display: block;">
+                <div class="content-panel">
+                    <div class="panel-title">Server Console</div>
+                    
+                    <div class="stat-grid">
+                        <div class="stat-card">
+                            <div class="stat-label">Status</div>
+                            <div class="stat-value" style="display: flex; align-items: center; gap: 10px;">
+                                <span id="statusDot" class="status-dot" style="width: 15px; height: 15px;"></span>
+                                <span id="statusText" style="font-size: 0.7em;">OFFLINE</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Allocated RAM</div>
+                            <div class="stat-value" id="allocRam">0 MB</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">System RAM</div>
+                            <div class="stat-value" id="sysRam">0 GB</div>
+                        </div>
+                    </div>
+
+                    <div class="control-section">
+                        <div class="control-label">RAM ALLOCATION</div>
+                        <input type="range" id="ramSlider" min="512" max="8192" step="256" value="2048">
+                        <div style="color: #aaa; font-size: 0.9em;"><span id="ramValue">2048</span> MB</div>
+                    </div>
+
+                    <div class="button-row" style="margin-top: 30px;">
+                        <button class="btn-success" id="startBtn" onclick="startServer()">START SERVER</button>
+                        <button class="btn-danger" id="stopBtn" onclick="stopServer()" disabled>STOP SERVER</button>
+                    </div>
+
+                    <div style="margin-top: 30px;">
+                        <div class="control-label">COMMAND INPUT</div>
+                        <div class="console-input">
+                            <input type="text" id="cmdInput" placeholder="Enter command..." onkeypress="if(event.key==='Enter')sendCmd()">
+                            <button class="btn-primary" onclick="sendCmd()">SEND</button>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 30px;">
+                        <div class="control-label">ACTIVITY LOG</div>
+                        <div class="log" id="logBox"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SERVERS TAB -->
+            <div id="servers-tab" class="tab-content">
+                <div class="content-panel">
+                    <div class="panel-title">Active Servers</div>
+                    <div class="server-list" id="serverList">
+                        <div style="color: #aaa; text-align: center; padding: 40px;">No servers created yet</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CREATE SERVER TAB -->
+            <div id="create-tab" class="tab-content">
+                <div class="content-panel">
+                    <div class="panel-title">Create New Server</div>
+                    
+                    <div class="control-section">
+                        <div class="control-label">SERVER NAME</div>
+                        <input type="text" id="serverName" placeholder="e.g., MyServer">
+                    </div>
+
+                    <div class="control-section">
+                        <div class="control-label">SERVER VERSION (Spigot)</div>
+                        <select id="serverVersion">
+                            <option value="">Loading versions...</option>
+                        </select>
+                    </div>
+
+                    <div class="control-section">
+                        <div class="control-label">RAM ALLOCATION</div>
+                        <input type="range" id="newRamSlider" min="512" max="8192" step="256" value="2048">
+                        <div style="color: #aaa; font-size: 0.9em;"><span id="newRamValue">2048</span> MB</div>
+                    </div>
+
+                    <div class="control-section">
+                        <div class="control-label">🌍 IMPORT EXISTING WORLD (Optional)</div>
+                        <div class="world-upload-box" id="worldUploadBox">
+                            <div style="font-size: 2em; margin-bottom: 10px;">📦</div>
+                            <div style="color: #aaa; font-size: 0.9em; margin-bottom: 15px;">
+                                Upload a world folder as a ZIP file<br>
+                                <small>Should contain: world, world_nether, world_the_end folders</small>
+                            </div>
+                            <input type="file" id="worldInput" accept=".zip" style="display: none;" onchange="handleWorldSelect()">
+                            <button class="btn-primary" onclick="document.getElementById('worldInput').click()">Choose ZIP File</button>
+                            <div id="worldStatus" style="margin-top: 10px; color: #0f9dff; font-size: 0.9em;"></div>
+                        </div>
+                    </div>
+
+                    <button class="btn-primary" onclick="createServer()" style="width: 100%; margin-top: 20px; padding: 15px; font-size: 1.1em;">
+                        🚀 CREATE SERVER
+                    </button>
+                </div>
+            </div>
+
+            <!-- QUICK COMMANDS TAB -->
+            <div id="commands-tab" class="tab-content">
+                <div class="content-panel">
+                    <div class="panel-title">Quick Commands</div>
+                    <div id="cmdGrid" class="cmd-grid"></div>
+                </div>
+            </div>
+
+            <!-- FILE MANAGER TAB -->
+            <div id="files-tab" class="tab-content">
+                <div class="content-panel">
+                    <div class="panel-title">File Manager</div>
+                    
+                    <div class="control-section">
+                        <div class="control-label">SELECT SERVER</div>
+                        <select id="fileServerSelect" onchange="loadServerFiles()">
+                            <option value="">Choose a server...</option>
+                        </select>
+                    </div>
+
+                    <div id="fileManager" style="display: none;">
+                        <div class="control-section">
+                            <div class="control-label">UPLOAD FILES</div>
+                            <input type="file" id="fileInput" multiple>
+                            <button class="btn-primary" onclick="uploadFiles()" style="width: 100%;">UPLOAD</button>
+                        </div>
+
+                        <div class="control-section" style="margin-top: 20px;">
+                            <div class="control-label">SERVER FILES</div>
+                            <div style="background: #0f3460; border: 1px solid #0f9dff; border-radius: 6px; padding: 15px; max-height: 400px; overflow-y: auto;">
+                                <div id="fileList" style="color: #aaa;">Loading files...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SYSTEM TAB -->
+            <div id="system-tab" class="tab-content">
+                <div class="content-panel">
+                    <div class="panel-title">System Information</div>
+                    <div class="stat-grid">
+                        <div class="stat-card">
+                            <div class="stat-label">Total RAM</div>
+                            <div class="stat-value" id="sysTotalRam">0 GB</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Active Servers</div>
+                            <div class="stat-value" id="sysActiveServers">0</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const COMMANDS = {
+            "Player": [
+                {name: "List Players", cmd: "list"},
+                {name: "OP Player", cmd: "op @p"},
+                {name: "Creative Mode", cmd: "gamemode creative @p"},
+                {name: "Survival Mode", cmd: "gamemode survival @p"},
+                {name: "Teleport Spawn", cmd: "tp @p 0 100 0"},
+                {name: "Heal Player", cmd: "effect give @p instant_health 1 255"},
+            ],
+            "World": [
+                {name: "Set Day", cmd: "time set day"},
+                {name: "Set Night", cmd: "time set night"},
+                {name: "Clear Weather", cmd: "weather clear"},
+                {name: "Set Rain", cmd: "weather rain"},
+                {name: "Save World", cmd: "save-all"},
+                {name: "Stop Server", cmd: "stop"},
+            ],
+            "Server": [
+                {name: "Announce", cmd: "say Server Message!"},
+                {name: "Difficulty Hard", cmd: "difficulty hard"},
+                {name: "Difficulty Easy", cmd: "difficulty easy"},
+                {name: "Whitelist On", cmd: "whitelist on"},
+                {name: "Whitelist Off", cmd: "whitelist off"},
+            ]
+        };
+
+        let logs = [];
+        let activeServer = null;
+        let buildCheckInterval = null;
+
+        // Navigation
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.addEventListener('click', () => {
+                document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
+                item.classList.add('active');
+                document.getElementById(item.dataset.tab + '-tab').style.display = 'block';
+                
+                if (item.dataset.tab === 'servers') loadServers();
+                if (item.dataset.tab === 'files') loadServerOptions();
+                if (item.dataset.tab === 'commands') loadQuickCommands();
+            });
+        });
+
+        // RAM sliders
+        document.getElementById('ramSlider').addEventListener('input', e => {
+            document.getElementById('ramValue').textContent = e.target.value;
+        });
+        document.getElementById('newRamSlider').addEventListener('input', e => {
+            document.getElementById('newRamValue').textContent = e.target.value;
+        });
+
+        // Logging
+        function addLog(msg, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            logs.push({msg: `[${timestamp}] ${msg}`, type});
+            if (logs.length > 100) logs.shift();
+            const logBox = document.getElementById('logBox');
+            logBox.innerHTML = logs.map(l => `<div class="log-line log-${l.type}">${l.msg}</div>`).join('');
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        // Status updates
+        function updateStatus() {
+            fetch('/api/server-status').then(r => r.json()).then(d => {
+                const online = d.running;
+                document.getElementById('statusDot').style.background = online ? '#00b368' : '#666';
+                let statusText = online ? 'ONLINE' : 'OFFLINE';
+                if (d.server_name) statusText += ` (${d.server_name})`;
+                document.getElementById('statusText').textContent = statusText;
+                document.getElementById('allocRam').textContent = d.allocated_ram + ' MB';
+                document.getElementById('startBtn').disabled = online;
+                document.getElementById('stopBtn').disabled = !online;
+            }).catch(() => {});
+        }
+
+        function getSystemInfo() {
+            fetch('/api/system-info').then(r => r.json()).then(d => {
+                document.getElementById('sysRam').textContent = d.total_ram_gb + ' GB';
+                document.getElementById('sysTotalRam').textContent = d.total_ram_gb + ' GB';
+                document.getElementById('ramSlider').max = Math.floor(d.total_ram_mb * 0.75);
+                document.getElementById('newRamSlider').max = Math.floor(d.total_ram_mb * 0.75);
+            }).catch(() => {});
+        }
+
+        function loadVersions() {
+            fetch('/api/versions').then(r => r.json()).then(d => {
+                const select = document.getElementById('serverVersion');
+                select.innerHTML = d.versions.map(v => 
+                    `<option value="${v.version}">${v.version} (${v.type})</option>`
+                ).join('');
+            }).catch(() => {});
+        }
+
+        function handleWorldSelect() {
+            const file = document.getElementById('worldInput').files[0];
+            const box = document.getElementById('worldUploadBox');
+            const status = document.getElementById('worldStatus');
+            if (file) {
+                box.classList.add('has-file');
+                status.innerHTML = `✅ Selected: <strong>${file.name}</strong> (${(file.size/1024/1024).toFixed(2)} MB)`;
+            } else {
+                box.classList.remove('has-file');
+                status.innerHTML = '';
+            }
+        }
+
+        function createServer() {
+            const name = document.getElementById('serverName').value.trim();
+            const ram = document.getElementById('newRamSlider').value;
+            const version = document.getElementById('serverVersion').value;
+            const worldFile = document.getElementById('worldInput').files[0];
+            
+            if (!name) {
+                addLog('⚠️ Server name required', 'error');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('server_name', name);
+            formData.append('ram', ram);
+            formData.append('version', version);
+            if (worldFile) {
+                formData.append('world', worldFile);
+                addLog(`🌍 Uploading world: ${worldFile.name}...`, 'info');
+            }
+            
+            addLog(`🔨 Creating '${name}' (${version})...`, 'info');
+            addLog('🔍 Searching for existing JAR first...', 'info');
+            
+            fetch('/api/build-server', {method: 'POST', body: formData})
+                .then(r => r.json()).then(d => {
+                    if (d.status === 'success') {
+                        addLog('✅ ' + d.message, 'success');
+                        document.getElementById('serverName').value = '';
+                        document.getElementById('worldInput').value = '';
+                        document.getElementById('worldStatus').innerHTML = '';
+                        document.getElementById('worldUploadBox').classList.remove('has-file');
+                        
+                        // Monitor build progress
+                        buildCheckInterval = setInterval(() => checkBuildStatus(name), 2000);
+                        
+                        setTimeout(() => {
+                            document.querySelector('[data-tab="servers"]').click();
+                        }, 2000);
+                    } else {
+                        addLog('❌ ' + d.message, 'error');
+                    }
+                }).catch(e => addLog('Create failed: ' + e, 'error'));
+        }
+
+        function checkBuildStatus(serverName) {
+            fetch(`/api/build-status/${serverName}`)
+                .then(r => r.json()).then(d => {
+                    if (d.status === 'complete' || d.status === 'error') {
+                        if (buildCheckInterval) {
+                            clearInterval(buildCheckInterval);
+                            buildCheckInterval = null;
+                        }
+                        if (d.status === 'complete') {
+                            addLog(`✅ ${serverName}: ${d.message}`, 'success');
+                        } else {
+                            addLog(`❌ ${serverName}: ${d.message}`, 'error');
+                        }
+                        loadServers();
+                    } else if (d.message) {
+                        addLog(`⏳ ${serverName}: ${d.message} (${d.progress}%)`, 'info');
+                    }
+                }).catch(() => {});
+        }
+
+        function loadServers() {
+            fetch('/api/servers').then(r => r.json()).then(d => {
+                if (d.servers.length === 0) {
+                    document.getElementById('serverList').innerHTML = 
+                        '<div style="color: #aaa; text-align: center; padding: 40px;">No servers created yet. Use the Create Server tab!</div>';
+                    document.getElementById('sysActiveServers').textContent = '0';
+                    return;
+                }
+                
+                const html = d.servers.map(s => {
+                    let statusColor = '#666';
+                    let statusText = 'OFFLINE';
+                    let buildProgress = '';
+                    
+                    if (s.building) {
+                        statusColor = '#ff9800';
+                        statusText = 'BUILDING';
+                        buildProgress = `<div class="progress-bar"><div class="progress-fill" style="width: 50%"></div></div>
+                            <div style="color: #ff9800; font-size: 0.85em;">⏳ Building server (5-10 minutes)...</div>`;
+                    } else if (s.running) {
+                        statusColor = '#00b368';
+                        statusText = 'ONLINE';
+                    }
+                    
+                    return `
+                    <div class="server-card ${!s.running && !s.building ? 'offline' : ''}">
+                        <div class="server-name">${s.name}</div>
+                        <div class="server-info">Version: ${s.version} | RAM: ${s.ram}MB | Port: ${s.port}</div>
+                        <div class="server-status">
+                            <span class="status-dot" style="background: ${statusColor};"></span>
+                            <span>${statusText}</span>
+                        </div>
+                        ${buildProgress}
+                        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 12px;">
+                            <button class="btn-success" onclick="startNamed('${s.name}', ${s.ram})" 
+                                style="padding: 10px; font-size: 0.85em;" ${s.running || s.building ? 'disabled' : ''}>START</button>
+                            <button class="btn-danger" onclick="stopNamed('${s.name}')" 
+                                style="padding: 10px; font-size: 0.85em;" ${!s.running ? 'disabled' : ''}>STOP</button>
+                            <button class="btn-primary" onclick="manageServer('${s.name}')" 
+                                style="padding: 10px; font-size: 0.85em;" ${s.building ? 'disabled' : ''}>MANAGE</button>
+                        </div>
+                    </div>
+                `;
+                }).join('');
+                document.getElementById('serverList').innerHTML = html;
+                document.getElementById('sysActiveServers').textContent = d.servers.filter(s => s.running).length;
+            }).catch(() => {});
+        }
+
+        function startNamed(name, ram) {
+            addLog(`Starting '${name}'...`, 'info');
+            fetch('/api/start-named', {
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'}, 
+                body: JSON.stringify({server_name: name, ram: parseInt(ram)})
+            }).then(r => r.json()).then(d => {
+                addLog(d.message, d.status === 'success' ? 'success' : 'error');
+                setTimeout(() => { loadServers(); updateStatus(); }, 1000);
+            }).catch(e => addLog('Start failed: ' + e, 'error'));
+        }
+
+        function stopNamed(name) {
+            addLog(`Stopping '${name}'...`, 'info');
+            fetch(`/api/stop-named/${name}`, {method: 'POST'})
+                .then(r => r.json()).then(d => {
+                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
+                    setTimeout(() => { loadServers(); updateStatus(); }, 1000);
+                }).catch(e => addLog('Stop failed: ' + e, 'error'));
+        }
+
+        function manageServer(name) {
+            activeServer = name;
+            fetch(`/api/set-current-server/${name}`, {method: 'POST'})
+                .then(r => r.json()).then(d => {
+                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
+                    document.querySelector('[data-tab="console"]').click();
+                    updateStatus();
+                }).catch(e => addLog('Failed to set server: ' + e, 'error'));
+        }
+
+        function sendCmd() {
+            const cmd = document.getElementById('cmdInput').value.trim();
+            if (!cmd) return;
+            
+            addLog(`> ${cmd}`, 'cmd');
+            const url = activeServer ? `/api/command-named/${activeServer}` : '/api/command';
+            
+            fetch(url, {
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'}, 
+                body: JSON.stringify({command: cmd})
+            }).then(r => r.json()).then(d => {
+                addLog(d.message, d.status === 'success' ? 'success' : 'error');
+            }).catch(e => addLog('Command failed: ' + e, 'error'));
+            
+            document.getElementById('cmdInput').value = '';
+        }
+
+        function loadQuickCommands() {
+            let html = '';
+            for (const [category, cmds] of Object.entries(COMMANDS)) {
+                html += `<div style="grid-column: 1/-1; color: #0f9dff; font-weight: bold; margin-top: 15px;">${category}</div>`;
+                cmds.forEach(c => {
+                    html += `<button class="cmd-btn" onclick="quickCmd('${c.cmd}')">${c.name}</button>`;
+                });
+            }
+            document.getElementById('cmdGrid').innerHTML = html;
+        }
+
+        function quickCmd(cm
