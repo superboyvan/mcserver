@@ -8,9 +8,17 @@ import socket
 import requests
 import shutil
 import threading
+import zipfile
+
+import logging
 
 app = Flask(__name__)
 CORS(app)
+
+# Disable Flask request logging
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
+app.logger.setLevel(logging.ERROR)
 
 # Server JAR cache directory
 CACHE_DIR = os.path.expanduser("~/mcserver_cache")
@@ -33,12 +41,15 @@ MINECRAFT_VERSIONS = [
 BUILDTOOLS_URL = "https://hub.spigotmc.org/jenkins/job/BuildTools/lastSuccessfulBuild/artifact/target/BuildTools.jar"
 
 def get_server_dir():
-    if os.path.exists("/home/cam/mcserver/server.jar"):
-        return "/home/cam/mcserver"
-    elif os.path.exists(os.path.expanduser("~/mcserver/server.jar")):
-        return os.path.expanduser("~/mcserver")
+    # Try to find home directory that exists
+    if os.path.exists("/home/cam"):
+        base = "/home/cam"
     else:
-        return os.path.expanduser("~/mcserver")
+        base = os.path.expanduser("~")
+    
+    server_dir = os.path.join(base, "mcserver")
+    os.makedirs(server_dir, exist_ok=True)
+    return server_dir
 
 SERVER_DIR = get_server_dir()
 SPIGOT_JAR = "server.jar"
@@ -46,9 +57,53 @@ server_process = None
 allocated_ram = 2048
 servers = {}
 build_status = {}
+current_server = None  # Track which server is active in console
 
 print(f"[INFO] Using server directory: {SERVER_DIR}")
 print(f"[INFO] Cache directory: {CACHE_DIR}")
+
+def find_existing_jar(version):
+    """
+    Search for existing compiled Spigot JAR files for the given version.
+    Checks multiple locations:
+    1. Cache directory
+    2. Current directory
+    3. BuildTools build directories
+    4. Common Minecraft server locations
+    """
+    search_patterns = [
+        # Cache directory
+        os.path.join(CACHE_DIR, f"spigot-{version}.jar"),
+        os.path.join(CACHE_DIR, f"spigot-{version}*.jar"),
+        
+        # BuildTools directory
+        os.path.join(BUILDTOOLS_DIR, f"build-{version}", f"spigot-{version}.jar"),
+        os.path.join(BUILDTOOLS_DIR, f"build-{version}", f"spigot-{version}*.jar"),
+        os.path.join(BUILDTOOLS_DIR, f"spigot-{version}.jar"),
+        os.path.join(BUILDTOOLS_DIR, f"spigot-{version}*.jar"),
+        
+        # Current working directory
+        os.path.join(os.getcwd(), f"spigot-{version}.jar"),
+        os.path.join(os.getcwd(), f"spigot-{version}*.jar"),
+        
+        # Server directory
+        os.path.join(SERVER_DIR, f"spigot-{version}.jar"),
+        os.path.join(SERVER_DIR, f"spigot-{version}*.jar"),
+        
+        # Home directory
+        os.path.join(os.path.expanduser("~"), f"spigot-{version}.jar"),
+        os.path.join(os.path.expanduser("~"), f"spigot-{version}*.jar"),
+    ]
+    
+    for pattern in search_patterns:
+        matches = glob.glob(pattern)
+        if matches:
+            # Return the first match found
+            jar_file = matches[0]
+            print(f"[INFO] Found existing Spigot {version} JAR: {jar_file}")
+            return jar_file
+    
+    return None
 
 def download_buildtools():
     """Download BuildTools.jar if not present"""
@@ -76,27 +131,47 @@ def download_buildtools():
         return None
 
 def build_spigot(version, server_name):
-    """Build Spigot for a specific version using BuildTools"""
-    build_status[server_name] = {"status": "downloading_buildtools", "progress": 10}
+    """Build or find Spigot for a specific version"""
+    build_status[server_name] = {"status": "searching", "progress": 5, "message": "Searching for existing JAR..."}
+    
+    # First, try to find an existing compiled JAR
+    existing_jar = find_existing_jar(version)
+    if existing_jar:
+        # Copy to cache if not already there
+        cache_file = os.path.join(CACHE_DIR, f"spigot-{version}.jar")
+        if existing_jar != cache_file:
+            print(f"[INFO] Copying existing JAR to cache: {existing_jar} -> {cache_file}")
+            try:
+                shutil.copy2(existing_jar, cache_file)
+                print(f"[INFO] Existing JAR copied to cache")
+            except Exception as e:
+                print(f"[WARNING] Could not copy to cache: {e}")
+        
+        build_status[server_name] = {"status": "complete", "progress": 100, "message": "Using existing JAR"}
+        return existing_jar
+    
+    print(f"[INFO] No existing JAR found for version {version}, will build it")
+    
+    # Check cache directory one more time
+    cache_file = os.path.join(CACHE_DIR, f"spigot-{version}.jar")
+    if os.path.exists(cache_file):
+        print(f"[INFO] Using cached Spigot {version}")
+        build_status[server_name] = {"status": "complete", "progress": 100, "message": "Using cached JAR"}
+        return cache_file
+    
+    build_status[server_name] = {"status": "downloading_buildtools", "progress": 10, "message": "Downloading BuildTools..."}
     
     # Download BuildTools
     buildtools_path = download_buildtools()
     if not buildtools_path:
-        build_status[server_name] = {"status": "error", "message": "Failed to download BuildTools"}
+        build_status[server_name] = {"status": "error", "message": "Failed to download BuildTools", "progress": 0}
         return None
-    
-    # Check if version already built
-    cache_file = os.path.join(CACHE_DIR, f"spigot-{version}.jar")
-    if os.path.exists(cache_file):
-        print(f"[INFO] Using cached Spigot {version}")
-        build_status[server_name] = {"status": "complete", "progress": 100}
-        return cache_file
     
     # Build directory for this version
     version_build_dir = os.path.join(BUILDTOOLS_DIR, f"build-{version}")
     os.makedirs(version_build_dir, exist_ok=True)
     
-    build_status[server_name] = {"status": "building", "progress": 30}
+    build_status[server_name] = {"status": "building", "progress": 30, "message": f"Building Spigot {version}..."}
     print(f"[INFO] Building Spigot {version}... This may take several minutes")
     
     try:
@@ -119,35 +194,35 @@ def build_spigot(version, server_name):
         
         if process.returncode != 0:
             print(f"[ERROR] BuildTools failed: {stderr}")
-            build_status[server_name] = {"status": "error", "message": "Build failed"}
+            build_status[server_name] = {"status": "error", "message": "Build failed", "progress": 0}
             return None
         
-        build_status[server_name] = {"status": "finalizing", "progress": 90}
+        build_status[server_name] = {"status": "finalizing", "progress": 90, "message": "Finalizing build..."}
         
         # Find the built JAR
         spigot_jar = os.path.join(version_build_dir, f"spigot-{version}.jar")
         if not os.path.exists(spigot_jar):
             # Try alternative naming
             for file in os.listdir(version_build_dir):
-                if file.startswith("spigot") and file.endswith(".jar"):
+                if file.startswith("spigot") and file.endswith(".jar") and version in file:
                     spigot_jar = os.path.join(version_build_dir, file)
                     break
         
         if not os.path.exists(spigot_jar):
             print(f"[ERROR] Built JAR not found")
-            build_status[server_name] = {"status": "error", "message": "Built JAR not found"}
+            build_status[server_name] = {"status": "error", "message": "Built JAR not found", "progress": 0}
             return None
         
         # Copy to cache
         shutil.copy2(spigot_jar, cache_file)
         print(f"[INFO] Spigot {version} built and cached successfully")
         
-        build_status[server_name] = {"status": "complete", "progress": 100}
+        build_status[server_name] = {"status": "complete", "progress": 100, "message": "Build complete!"}
         return cache_file
         
     except Exception as e:
         print(f"[ERROR] Build failed: {e}")
-        build_status[server_name] = {"status": "error", "message": str(e)}
+        build_status[server_name] = {"status": "error", "message": str(e), "progress": 0}
         return None
 
 def find_existing_server():
@@ -183,9 +258,21 @@ def is_server_running():
             return False
 
 def start_server(ram_mb):
-    global server_process, allocated_ram
+    global server_process, allocated_ram, current_server
+    
+    # If managing a specific server, use that one
+    if current_server and current_server in servers:
+        return start_named_server(current_server, ram_mb)
+    
+    # Otherwise try to start default server
     if server_process and is_server_running():
         return {"status": "error", "message": "Server already running"}
+    
+    # Check if server.jar exists
+    jar_path = os.path.join(SERVER_DIR, SPIGOT_JAR)
+    if not os.path.exists(jar_path):
+        return {"status": "error", "message": f"No server.jar found in {SERVER_DIR}. Create a server first!"}
+    
     allocated_ram = ram_mb
     cmd = ["java", f"-Xmx{ram_mb}M", f"-Xms{ram_mb//2}M", "-jar", SPIGOT_JAR, "nogui"]
     try:
@@ -224,7 +311,12 @@ def stop_server():
             return {"status": "success", "message": "Server force stopped"}
 
 def run_command(cmd):
-    global server_process
+    global server_process, current_server
+    
+    # If managing a specific server, send command to it
+    if current_server and current_server in servers:
+        return run_command_on_server(current_server, cmd)
+    
     if not is_server_running():
         return {"status": "error", "message": "Server not running"}
     
@@ -316,6 +408,7 @@ def get_next_available_port():
     return port
 
 def start_named_server(server_name, ram_mb):
+    global current_server
     if server_name not in servers:
         return {"status": "error", "message": f"Server '{server_name}' not found"}
     
@@ -323,8 +416,23 @@ def start_named_server(server_name, ram_mb):
     if server_info['running']:
         return {"status": "error", "message": f"Server '{server_name}' already running"}
     
-    server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
-    port = get_next_available_port()
+    # Determine base directory
+    if os.path.exists("/home/cam"):
+        base = "/home/cam"
+    else:
+        base = os.path.expanduser("~")
+    
+    server_dir = os.path.join(base, f"mcserver-{server_name.lower()}")
+    
+    # Check if server directory and JAR exist
+    if not os.path.exists(server_dir):
+        return {"status": "error", "message": f"Server directory not found: {server_dir}"}
+    
+    jar_path = os.path.join(server_dir, SPIGOT_JAR)
+    if not os.path.exists(jar_path):
+        return {"status": "error", "message": f"Server JAR not found. Server may still be building."}
+    
+    port = server_info.get('port', get_next_available_port())
     
     cmd = ["java", f"-Xmx{ram_mb}M", f"-Xms{ram_mb//2}M", "-jar", SPIGOT_JAR, "nogui"]
     
@@ -335,6 +443,8 @@ def start_named_server(server_name, ram_mb):
         server_info['running'] = True
         server_info['port'] = port
         server_info['pid'] = proc.pid
+        server_info['ram'] = ram_mb
+        current_server = server_name
         
         props_file = os.path.join(server_dir, "server.properties")
         update_server_properties(props_file, server_name, port)
@@ -353,7 +463,23 @@ def api_system_info():
 
 @app.route('/api/server-status')
 def api_server_status():
-    return jsonify({"running": is_server_running(), "allocated_ram": allocated_ram})
+    global current_server
+    
+    # If managing a specific server, return its status
+    if current_server and current_server in servers:
+        server_info = servers[current_server]
+        return jsonify({
+            "running": server_info['running'],
+            "allocated_ram": server_info['ram'],
+            "server_name": current_server
+        })
+    
+    # Otherwise return default server status
+    return jsonify({
+        "running": is_server_running(),
+        "allocated_ram": allocated_ram,
+        "server_name": None
+    })
 
 @app.route('/api/start', methods=['POST'])
 def api_start():
@@ -389,10 +515,18 @@ def api_build_status(server_name):
 
 @app.route('/api/build-server', methods=['POST'])
 def api_build_server():
-    data = request.json
-    server_name = data.get('server_name', 'Server')
-    ram = data.get('ram', 2048)
-    version = data.get('version', '1.21.5')
+    # Handle both JSON and form-data requests
+    if request.is_json:
+        data = request.json
+        server_name = data.get('server_name', 'Server')
+        ram = data.get('ram', 2048)
+        version = data.get('version', '1.21.5')
+        world_file = None
+    else:
+        server_name = request.form.get('server_name', 'Server')
+        ram = int(request.form.get('ram', 2048))
+        version = request.form.get('version', '1.21.5')
+        world_file = request.files.get('world')
     
     if server_name in servers:
         return jsonify({"status": "error", "message": f"Server '{server_name}' already exists"})
@@ -408,14 +542,21 @@ def api_build_server():
     
     def build_async():
         try:
-            server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
+            # Determine base directory
+            if os.path.exists("/home/cam"):
+                base = "/home/cam"
+            else:
+                base = os.path.expanduser("~")
+            
+            server_dir = os.path.join(base, f"mcserver-{server_name.lower()}")
             os.makedirs(server_dir, exist_ok=True)
             
-            # Build/download Spigot
+            # Build/download Spigot (or find existing)
             jar_file = build_spigot(version, server_name)
             
             if not jar_file:
                 servers[server_name]['building'] = False
+                build_status[server_name] = {"status": "error", "message": "Failed to build server", "progress": 0}
                 return
             
             # Copy JAR to server directory
@@ -427,6 +568,30 @@ def api_build_server():
             with open(eula_file, 'w') as f:
                 f.write("eula=true\n")
             
+            # Handle world import if provided
+            if world_file:
+                build_status[server_name] = {"status": "importing_world", "progress": 80, "message": "Importing world..."}
+                print(f"[INFO] Importing world for server '{server_name}'")
+                
+                try:
+                    # Save uploaded file temporarily
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp_file:
+                        world_file.save(tmp_file.name)
+                        tmp_path = tmp_file.name
+                    
+                    # Extract the world
+                    with zipfile.ZipFile(tmp_path, 'r') as zip_ref:
+                        # Extract all contents
+                        zip_ref.extractall(server_dir)
+                    
+                    # Clean up temp file
+                    os.remove(tmp_path)
+                    print(f"[INFO] World imported successfully")
+                    
+                except Exception as e:
+                    print(f"[ERROR] Failed to import world: {e}")
+                    build_status[server_name] = {"status": "warning", "message": f"Server created but world import failed: {e}", "progress": 90}
+            
             # Create server.properties
             props_file = os.path.join(server_dir, "server.properties")
             port = get_next_available_port()
@@ -437,9 +602,11 @@ def api_build_server():
             add_to_hosts(server_name)
             
             print(f"[INFO] Server '{server_name}' built successfully for Spigot {version}")
+            build_status[server_name] = {"status": "complete", "message": "Server ready!", "progress": 100}
             
         except Exception as e:
             servers[server_name]['building'] = False
+            build_status[server_name] = {"status": "error", "message": str(e), "progress": 0}
             print(f"[ERROR] Failed to build server: {e}")
     
     # Start build in background thread
@@ -447,7 +614,8 @@ def api_build_server():
     thread.daemon = True
     thread.start()
     
-    return jsonify({"status": "success", "message": f"Building server '{server_name}' for Spigot {version}. This may take several minutes..."})
+    world_msg = " with custom world" if world_file else ""
+    return jsonify({"status": "success", "message": f"Building server '{server_name}'{world_msg} for Spigot {version}. Checking for existing JAR first..."})
 
 @app.route('/api/servers', methods=['GET'])
 def api_servers():
@@ -470,6 +638,7 @@ def api_start_named():
 
 @app.route('/api/stop-named/<server_name>', methods=['POST'])
 def api_stop_named(server_name):
+    global current_server
     if server_name not in servers:
         return jsonify({"status": "error", "message": f"Server '{server_name}' not found"})
     
@@ -482,20 +651,38 @@ def api_stop_named(server_name):
         server_info['process'].stdin.flush()
         server_info['process'].wait(timeout=30)
         server_info['running'] = False
+        if current_server == server_name:
+            current_server = None
         return jsonify({"status": "success", "message": f"Server '{server_name}' stopped"})
     except subprocess.TimeoutExpired:
         server_info['process'].kill()
         server_info['running'] = False
+        if current_server == server_name:
+            current_server = None
         return jsonify({"status": "success", "message": f"Server '{server_name}' force stopped"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/set-current-server/<server_name>', methods=['POST'])
+def api_set_current_server(server_name):
+    global current_server
+    if server_name not in servers:
+        return jsonify({"status": "error", "message": f"Server '{server_name}' not found"})
+    current_server = server_name
+    return jsonify({"status": "success", "message": f"Now managing: {server_name}"})
 
 @app.route('/api/server-files/<server_name>', methods=['GET'])
 def api_server_files(server_name):
     if server_name not in servers:
         return jsonify({"status": "error", "message": "Server not found"}), 404
     
-    server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
+    # Determine base directory
+    if os.path.exists("/home/cam"):
+        base = "/home/cam"
+    else:
+        base = os.path.expanduser("~")
+    
+    server_dir = os.path.join(base, f"mcserver-{server_name.lower()}")
     if not os.path.exists(server_dir):
         return jsonify({"status": "error", "message": "Server directory not found"}), 404
     
@@ -519,7 +706,13 @@ def api_upload(server_name):
     if server_name not in servers:
         return jsonify({"status": "error", "message": "Server not found"}), 404
     
-    server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
+    # Determine base directory
+    if os.path.exists("/home/cam"):
+        base = "/home/cam"
+    else:
+        base = os.path.expanduser("~")
+    
+    server_dir = os.path.join(base, f"mcserver-{server_name.lower()}")
     if not os.path.exists(server_dir):
         return jsonify({"status": "error", "message": "Server directory not found"}), 404
     
@@ -557,7 +750,13 @@ def api_delete_file(server_name, filename):
     if server_name not in servers:
         return jsonify({"status": "error", "message": "Server not found"}), 404
     
-    server_dir = os.path.join("/home/cam", f"mcserver-{server_name.lower()}")
+    # Determine base directory
+    if os.path.exists("/home/cam"):
+        base = "/home/cam"
+    else:
+        base = os.path.expanduser("~")
+    
+    server_dir = os.path.join(base, f"mcserver-{server_name.lower()}")
     filepath = os.path.join(server_dir, filename)
     
     if not os.path.abspath(filepath).startswith(os.path.abspath(server_dir)):
@@ -733,6 +932,17 @@ HTML = """<!DOCTYPE html>
                         <div style="color: #aaa; font-size: 0.9em;"><span id="newRamValue">2048</span> MB</div>
                     </div>
 
+                    <div class="control-section">
+                        <div class="control-label">🌍 IMPORT EXISTING WORLD (Optional)</div>
+                        <div style="background: #0f3460; border: 1px solid #0f9dff; border-radius: 6px; padding: 15px; margin-bottom: 10px;">
+                            <div style="color: #aaa; font-size: 0.85em; margin-bottom: 10px;">
+                                Upload a world folder as a ZIP file. The ZIP should contain folders like: world, world_nether, world_the_end
+                            </div>
+                            <input type="file" id="worldInput" accept=".zip" style="margin-bottom: 0;">
+                            <div id="worldStatus" style="color: #0f9dff; font-size: 0.85em; margin-top: 5px;"></div>
+                        </div>
+                    </div>
+
                     <button class="btn-primary" onclick="createServer()" style="width: 100%; margin-top: 20px; padding: 15px;">CREATE SERVER</button>
                 </div>
             </div>
@@ -838,7 +1048,11 @@ HTML = """<!DOCTYPE html>
             fetch('/api/server-status').then(r => r.json()).then(d => {
                 const online = d.running;
                 document.getElementById('statusDot').style.background = online ? '#00b368' : '#666';
-                document.getElementById('statusText').textContent = online ? 'ONLINE' : 'OFFLINE';
+                let statusText = online ? 'ONLINE' : 'OFFLINE';
+                if (d.server_name) {
+                    statusText += ` (${d.server_name})`;
+                }
+                document.getElementById('statusText').textContent = statusText;
                 document.getElementById('allocRam').textContent = d.allocated_ram + ' MB';
                 document.getElementById('startBtn').disabled = online;
                 document.getElementById('stopBtn').disabled = !online;
@@ -874,10 +1088,17 @@ HTML = """<!DOCTYPE html>
 
         function startServer() {
             const ram = document.getElementById('ramSlider').value;
-            addLog(`Starting with ${ram}MB...`, 'info');
+            addLog(`Starting server with ${ram}MB...`, 'info');
             fetch('/api/start', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ram: parseInt(ram)})})
                 .then(r => r.json()).then(d => {
-                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
+                    if (d.status === 'error') {
+                        addLog('⚠️ ' + d.message, 'error');
+                        if (d.message.includes('No server.jar')) {
+                            addLog('💡 Create a server first using "Create Server" tab!', 'info');
+                        }
+                    } else {
+                        addLog(d.message, 'success');
+                    }
                     setTimeout(updateStatus, 1000);
                 }).catch(e => addLog('Start failed: ' + e, 'error'));
         }
@@ -911,35 +1132,78 @@ HTML = """<!DOCTYPE html>
             const name = document.getElementById('serverName').value.trim();
             const ram = document.getElementById('newRamSlider').value;
             const version = document.getElementById('serverVersion').value;
+            const worldFile = document.getElementById('worldInput').files[0];
+            
             if (!name) {
-                addLog('Server name required', 'error');
+                addLog('⚠️ Server name required', 'error');
                 return;
             }
-            addLog(`Creating '${name}' (Spigot ${version})...`, 'info');
-            addLog('NOTE: Building Spigot takes 5-10 minutes on first run!', 'info');
-            fetch('/api/build-server', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({server_name: name, ram: parseInt(ram), version: version})})
+            
+            const formData = new FormData();
+            formData.append('server_name', name);
+            formData.append('ram', ram);
+            formData.append('version', version);
+            if (worldFile) {
+                formData.append('world', worldFile);
+                addLog(`🌍 Uploading world file: ${worldFile.name}...`, 'info');
+            }
+            
+            addLog(`🔨 Creating '${name}' (Spigot ${version})...`, 'info');
+            addLog('🔍 Checking for existing compiled JARs first...', 'info');
+            if (!worldFile) {
+                addLog('⏳ If JAR not found, building will take 5-10 minutes!', 'info');
+            }
+            
+            fetch('/api/build-server', {method: 'POST', body: formData})
                 .then(r => r.json()).then(d => {
-                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
-                    document.getElementById('serverName').value = '';
+                    if (d.status === 'success') {
+                        addLog('✅ ' + d.message, 'success');
+                        document.getElementById('serverName').value = '';
+                        document.getElementById('worldInput').value = '';
+                        document.getElementById('worldStatus').textContent = '';
+                        setTimeout(() => {
+                            document.querySelector('[data-tab="servers"]').click();
+                        }, 2000);
+                    } else {
+                        addLog('❌ ' + d.message, 'error');
+                    }
                     loadServers();
                 }).catch(e => addLog('Create failed: ' + e, 'error'));
         }
 
         function loadServers() {
             fetch('/api/servers').then(r => r.json()).then(d => {
-                const html = d.servers.map(s => `
+                const html = d.servers.map(s => {
+                    let statusColor = '#666';
+                    let statusText = 'OFFLINE';
+                    let buildProgress = '';
+                    
+                    if (s.building) {
+                        statusColor = '#ff9800';
+                        statusText = 'SEARCHING/BUILDING';
+                        buildProgress = '<div style="margin-top: 8px; color: #ff9800; font-size: 0.85em;">⏳ Checking for existing JAR or building (5-10 min)...</div>';
+                    } else if (s.running) {
+                        statusColor = '#00b368';
+                        statusText = 'ONLINE';
+                    }
+                    
+                    return `
                     <div class="server-card ${!s.running ? 'offline' : ''}">
                         <div class="server-name">${s.name}</div>
                         <div class="server-info">Version: ${s.version} | RAM: ${s.ram}MB | Port: ${s.port}</div>
                         <div class="server-status">
-                            <span class="status-dot" style="background: ${s.building ? '#ff9800' : s.running ? '#00b368' : '#666'};"></span>
-                            <span>${s.building ? 'BUILDING (may take 5-10 min)' : s.running ? 'ONLINE' : 'OFFLINE'}</span>
+                            <span class="status-dot" style="background: ${statusColor};"></span>
+                            <span>${statusText}</span>
                         </div>
-                        <button class="btn-primary" onclick="startNamed('${s.name}', ${s.ram})" style="width: 100%; margin-top: 10px;" ${s.running || s.building ? 'disabled' : ''}>START</button>
-                        <button class="btn-danger" onclick="stopNamed('${s.name}')" style="width: 100%; margin-top: 5px;" ${!s.running ? 'disabled' : ''}>STOP</button>
-                        <button class="btn-primary" onclick="manageServer('${s.name}')" style="width: 100%; margin-top: 5px;">MANAGE</button>
+                        ${buildProgress}
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 10px;">
+                            <button class="btn-success" onclick="startNamed('${s.name}', ${s.ram})" style="padding: 8px 12px; font-size: 0.85em;" ${s.running || s.building ? 'disabled' : ''}>START</button>
+                            <button class="btn-danger" onclick="stopNamed('${s.name}')" style="padding: 8px 12px; font-size: 0.85em;" ${!s.running ? 'disabled' : ''}>STOP</button>
+                        </div>
+                        <button class="btn-primary" onclick="manageServer('${s.name}')" style="width: 100%; margin-top: 5px; padding: 8px 12px; font-size: 0.85em;">MANAGE</button>
                     </div>
-                `).join('');
+                `;
+                }).join('');
                 document.getElementById('serverList').innerHTML = html || '<div style="color: #aaa;">No servers</div>';
                 document.getElementById('sysActiveServers').textContent = d.servers.filter(s => s.running).length;
             }).catch(e => console.log('Load servers failed:', e));
@@ -967,8 +1231,12 @@ HTML = """<!DOCTYPE html>
 
         function manageServer(name) {
             activeServer = name;
-            document.querySelector('[data-tab="console"]').click();
-            addLog(`Now managing: ${name}`, 'info');
+            fetch(`/api/set-current-server/${name}`, {method: 'POST'})
+                .then(r => r.json()).then(d => {
+                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
+                    document.querySelector('[data-tab="console"]').click();
+                    updateStatus();
+                }).catch(e => addLog('Failed to set server: ' + e, 'error'));
         }
 
         function loadServerOptions() {
@@ -1040,53 +1308,4 @@ HTML = """<!DOCTYPE html>
             if (!confirm(`Delete ${filename}?`)) return;
             addLog(`Deleting ${filename}...`, 'info');
             fetch(`/api/delete-file/${server}/${filename}`, {method: 'DELETE'})
-                .then(r => r.json()).then(d => {
-                    addLog(d.message, d.status === 'success' ? 'success' : 'error');
-                    loadServerFiles();
-                }).catch(e => addLog('Delete failed: ' + e, 'error'));
-        }
-
-        function initCmds() {
-            const grid = document.getElementById('cmdGrid');
-            let html = '';
-            for (const [cat, cmds] of Object.entries(COMMANDS)) {
-                html += `<div style="grid-column: 1/-1; color: #0f9dff; font-weight: 600; margin-top: 10px;">${cat}</div>`;
-                cmds.forEach(c => {
-                    html += `<button class="btn-primary" onclick="sendCommand('${c.cmd}')" style="padding: 10px 15px; font-size: 0.85em;">${c.name}</button>`;
-                });
-            }
-            grid.innerHTML = html;
-        }
-
-        function sendCommand(cmd) {
-            document.getElementById('cmdInput').value = cmd;
-            sendCmd();
-        }
-
-        document.getElementById('ramSlider').addEventListener('input', e => {
-            document.getElementById('ramValue').textContent = e.target.value;
-        });
-        document.getElementById('newRamSlider').addEventListener('input', e => {
-            document.getElementById('newRamValue').textContent = e.target.value;
-        });
-
-        document.getElementById('cmdInput').addEventListener('keypress', e => {
-            if (e.key === 'Enter') sendCmd();
-        });
-
-        getSystemInfo();
-        updateStatus();
-        loadServers();
-        loadServerOptions();
-        loadVersions();
-        initCmds();
-        setInterval(updateStatus, 2000);
-        setInterval(loadServers, 5000);
-        setInterval(loadServerOptions, 10000);
-        addLog('Ready', 'success');
-    </script>
-</body>
-</html>"""
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=80, debug=False)
+                .then(r => r.json()).then(
