@@ -1,0 +1,9 @@
+{
+  "host": "192.168.110.210",
+  "port": 25565,
+  "username": "TreeBot",
+  "searchRadius": 48,
+  "logBlockNames": ["oak_log","spruce_log","birch_log","jungle_log","acacia_log","dark_oak_log"],
+  "waitBetweenActionsMs": 800,
+  "maxTreeBlocks": 300
+}
